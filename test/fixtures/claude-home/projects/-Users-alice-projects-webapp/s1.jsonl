@@ -1,0 +1,3 @@
+{"type":"user","cwd":"/Users/alice/projects/webapp","sessionId":"s1","message":{"role":"user","content":"add a login form"},"timestamp":"2026-07-10T10:00:00Z"}
+{"type":"assistant","message":{"role":"assistant","content":"Sure, adding it now."},"timestamp":"2026-07-10T10:00:05Z"}
+{"type":"user","message":{"role":"user","content":"use tailwind for styling"},"timestamp":"2026-07-10T10:01:00Z"}

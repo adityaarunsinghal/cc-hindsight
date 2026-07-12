@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"subagent thread that must be excluded"},"timestamp":"2026-07-12T14:01:00Z"}
+{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":"nested"},"timestamp":"2026-07-12T14:01:05Z"}
