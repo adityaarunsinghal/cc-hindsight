@@ -1,0 +1,34 @@
+{
+  "name": "cc-hindsight",
+  "version": "0.1.0",
+  "description": "Mine your Claude Code session history into a oneshot prompt library and CLAUDE.md preferences. The prompt you'd write if you knew then what you know now.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "cc-hindsight": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "citty": "^0.2.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^22.20.1",
+    "tsdown": "^0.22.7",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}
