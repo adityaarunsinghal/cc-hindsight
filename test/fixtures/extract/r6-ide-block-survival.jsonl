@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-01-10T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened src/app.ts</ide_opened_file>"},{"type":"text","text":"Refactor this file to use async/await."}]}}
+{"type":"user","timestamp":"2026-01-10T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>be concise</system-reminder>"}]}}

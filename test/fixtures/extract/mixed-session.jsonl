@@ -1,0 +1,11 @@
+{"type":"user","timestamp":"2026-02-01T00:00:00.000Z","message":{"role":"user","content":"Set up a CI pipeline for this repo."}}
+{"type":"assistant","timestamp":"2026-02-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]}}
+{"type":"user","timestamp":"2026-02-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":"<command-name>caveat</command-name> meta noise"}}
+{"type":"attachment","timestamp":"2026-02-01T00:00:03.000Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"commandMode":"prompt","text":"Also run it on macOS."}}
+{"type":"user","timestamp":"2026-02-01T00:00:04.000Z","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened ci.yml</ide_opened_file>"},{"type":"text","text":"Use GitHub Actions, Node 22."}]}}
+{"type":"user","timestamp":"2026-02-01T00:00:05.000Z","toolUseResult":{"questions":[{"question":"Which test runner?","answer":"vitest"}]},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User answered."}]}}
+{"type":"user","timestamp":"2026-02-01T00:00:06.000Z","message":{"role":"user","content":"<command-message>review</command-message><command-name>/review</command-name><command-args>ci.yml</command-args>"}}
+{"type":"user","timestamp":"2026-02-01T00:00:07.000Z","message":{"role":"user","content":[{"type":"text","text":"See the failing run:"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}}
+{"type":"user","timestamp":"2026-02-01T00:00:08.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The tool use was rejected. the user said: Pin the action versions."}]}}
+{"type":"user","timestamp":"2026-02-01T00:00:09.000Z","message":{"role":"user","content":"[Request interrupted by user]"}}
+{"type":"user","timestamp":"2026-02-01T00:00:10.000Z","message":{"role":"user","content":"   "}}

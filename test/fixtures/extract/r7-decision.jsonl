@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-01-12T00:00:00.000Z","toolUseResult":{"questions":[{"question":"Which database should we use?","answer":"PostgreSQL"}]},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User answered the question."}]}}
+{"type":"user","timestamp":"2026-01-12T00:00:01.000Z","toolUseResult":{"questions":[{"question":"Which features to include?","answer":["Auth","Billing"]}]},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q2","content":"User answered the question."}]}}

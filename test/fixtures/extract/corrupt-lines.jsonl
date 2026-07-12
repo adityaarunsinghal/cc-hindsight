@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-01-20T00:00:00.000Z","message":{"role":"user","content":"First valid message."}}
+{"type":"user","timestamp":"2026-01-20T00:00
+{"type":"user","timestamp":"2026-01-20T00:00:02.000Z","message":{"role":"user","content":"Second valid message."}}
+42
+{"type":"user","message":{"role":"user","content":}}

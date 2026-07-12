@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-01-13T00:00:00.000Z","message":{"role":"user","content":"<command-message>review is analyzing…</command-message>\n<command-name>/review</command-name>\n<command-args>src/</command-args>"}}
+{"type":"user","timestamp":"2026-01-13T00:00:01.000Z","message":{"role":"user","content":"<command-name>deploy</command-name>\n<command-args></command-args>"}}
+{"type":"user","timestamp":"2026-01-13T00:00:02.000Z","message":{"role":"user","content":"<local-command-stdout>All checks passed.</local-command-stdout>"}}
