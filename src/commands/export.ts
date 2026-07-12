@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Writable } from "node:stream";
 import { defineCommand } from "citty";
+import { type AnaphoraRecord, buildAnaphora } from "../core/anaphora.js";
 import { buildCorpus, type Corpus, type CorpusSession, type DedupeInput } from "../core/dedupe.js";
 import { discoverProjects } from "../core/discover.js";
+import { buildOutcome, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
 import { exportFileName, renderExport } from "../core/render.js";
 import { dim, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
@@ -50,6 +52,12 @@ export interface ExportStats {
   readErrors: number;
   /** Corrupt JSONL lines skipped across all sessions. */
   badLines: number;
+  /** Short human turns (≤15 words) attached with anaphora context (§5.5). */
+  shortTurns: number;
+  /** Of those, how many had a pending plan/question decision surface. */
+  shortTurnsWithDecision: number;
+  /** Sessions for which bounded outcome evidence was captured (= exported). */
+  outcomeSessions: number;
   /** Absolute path to the exports directory that was written. */
   exportsDir: string;
   /** Written markdown basenames, sorted (manifest.json excluded). */
@@ -60,6 +68,12 @@ export interface ExportStats {
 function parseMinMessages(raw: string | undefined): number {
   const parsed = Number.parseInt(raw ?? "1", 10);
   return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
+}
+
+/** Whitespace-collapse and cap a short human turn for a one-line verbose row. */
+function snippetOneLine(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > 60 ? `${oneLine.slice(0, 57)}...` : oneLine;
 }
 
 /** True when a project short name matches the (case-insensitive) filter. */
@@ -115,8 +129,14 @@ export function runExport(opts: ExportArgs): ExportStats {
     }
   }
 
-  // ONE shared dedupe pass (R8) — Task 5's anaphora/outcome passes reuse this.
+  // ONE shared dedupe pass (R8) — anaphora/outcome reuse this exact corpus so
+  // their indices align with the rendered export (§5.5, flaw 7 disposition).
   const corpus = buildCorpus(inputs);
+
+  // Raw lines per session for the anaphora/outcome timeline walk (keyed by the
+  // unique source path). The corpus itself carries no raw lines.
+  const linesBySource = new Map<string, string[]>();
+  for (const inp of inputs) linesBySource.set(inp.sourcePath, inp.lines);
 
   // Partition sessions by the min-messages threshold.
   let zeroMessageSessions = 0;
@@ -135,11 +155,17 @@ export function runExport(opts: ExportArgs): ExportStats {
     }
   }
 
-  // Allocate filenames and render (deterministic corpus order → stable names).
+  // Allocate filenames, render, and run the anaphora + outcome passes per
+  // exported session (deterministic corpus order → stable names).
   const used = new Set<string>();
   const manifest: ManifestEntry[] = [];
   const writes: { file: string; content: string }[] = [];
+  const anaphoraByFile: Record<string, AnaphoraRecord[]> = {};
+  const outcomesByFile: Record<string, OutcomeEvidence> = {};
+  const attached: AttachedSession[] = [];
   let totalMessages = 0;
+  let shortTurns = 0;
+  let shortTurnsWithDecision = 0;
   for (const session of eligible) {
     const file = exportFileName(session.project, session.sessionId, used);
     writes.push({ file, content: renderExport(session) });
@@ -153,12 +179,31 @@ export function runExport(opts: ExportArgs): ExportStats {
       last_ts: session.lastTs,
     });
     totalMessages += session.messages.length;
+
+    const lines = linesBySource.get(session.sourcePath) ?? [];
+    const records = buildAnaphora(session, lines);
+    anaphoraByFile[file] = records;
+    outcomesByFile[file] = buildOutcome(session, lines);
+    shortTurns += records.length;
+    shortTurnsWithDecision += records.filter((r) => r.decision_kind !== null).length;
+    attached.push({ file, project: session.project, sessionId: session.sessionId, records });
   }
 
   // Deterministic manifest ordering, rewritten wholesale each run.
   manifest.sort((a, b) => a.export.localeCompare(b.export));
 
-  // Write to disk: mkdir -p, per-session markdown, then the manifest.
+  // Deterministic (sorted-by-export-name) anaphora + outcome objects. outcomes
+  // gets a leading `_note` labeling the assistant text (F11/§5.5).
+  const anaphoraOut: Record<string, AnaphoraRecord[]> = {};
+  for (const file of Object.keys(anaphoraByFile).sort()) {
+    anaphoraOut[file] = anaphoraByFile[file] ?? [];
+  }
+  const outcomesOut: Record<string, unknown> = { _note: OUTCOME_NOTE };
+  for (const file of Object.keys(outcomesByFile).sort()) {
+    outcomesOut[file] = outcomesByFile[file];
+  }
+
+  // Write to disk: mkdir -p, per-session markdown, then the JSON artifacts.
   fs.mkdirSync(exportsDir, { recursive: true });
   for (const { file, content } of writes) {
     fs.writeFileSync(path.join(exportsDir, file), content);
@@ -166,6 +211,14 @@ export function runExport(opts: ExportArgs): ExportStats {
   fs.writeFileSync(
     path.join(exportsDir, "manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(exportsDir, "anaphora.json"),
+    `${JSON.stringify(anaphoraOut, null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(exportsDir, "outcomes.json"),
+    `${JSON.stringify(outcomesOut, null, 2)}\n`,
   );
 
   const files = writes.map((w) => w.file).sort();
@@ -178,12 +231,23 @@ export function runExport(opts: ExportArgs): ExportStats {
     belowMinMessages,
     readErrors,
     badLines,
+    shortTurns,
+    shortTurnsWithDecision,
+    outcomeSessions: eligible.length,
     exportsDir,
     files,
   };
 
-  reportExport(write, opts, corpus, eligible, stats, minMessages, readErrorPaths);
+  reportExport(write, opts, corpus, eligible, stats, minMessages, readErrorPaths, attached);
   return stats;
+}
+
+/** Per-exported-session anaphora attachment info, for the summary + --verbose. */
+interface AttachedSession {
+  file: string;
+  project: string;
+  sessionId: string;
+  records: AnaphoraRecord[];
 }
 
 /** Print the summary, the skip/error accounting, and (opt-in) verbose detail. */
@@ -195,10 +259,18 @@ function reportExport(
   stats: ExportStats,
   minMessages: number,
   readErrorPaths: string[],
+  attached: AttachedSession[],
 ): void {
   write(
     `exported ${stats.exportedSessions} sessions (${stats.totalMessages} messages, ` +
       `${stats.duplicatesDropped} duplicates dropped) → ${stats.exportsDir}`,
+  );
+
+  // Anaphora + outcome accounting (§5.5 / Task 5 demo line).
+  write(
+    `${stats.shortTurns} short turns attached ` +
+      `(${stats.shortTurnsWithDecision} had a pending plan/question); ` +
+      `outcome evidence captured for ${stats.outcomeSessions} sessions`,
   );
 
   // Accounting for everything that did NOT get exported (observability).
@@ -243,6 +315,25 @@ function reportExport(
     }
     for (const p of readErrorPaths) {
       write(dim(`read error: ${p}`));
+    }
+
+    // Attached short turns per exported session (index, text, plan/question).
+    for (const session of attached) {
+      if (session.records.length === 0) continue;
+      write(
+        dim(
+          `${session.project}/${session.sessionId}: ${session.records.length} short turn(s) attached`,
+        ),
+      );
+      for (const record of session.records) {
+        const decision = record.decision_kind ? ` +${record.decision_kind}` : "";
+        const antecedent = record.antecedent ? " +antecedent" : "";
+        write(
+          dim(
+            `    #${record.index} "${snippetOneLine(record.human_text)}"${antecedent}${decision}`,
+          ),
+        );
+      }
     }
   }
 

@@ -322,18 +322,188 @@ export function extractMessages(lines: string[]): ExtractResult {
       continue;
     }
 
-    const pieces: string[] = [];
-    if (entry.type === "attachment") {
-      collectAttachment(entry, pieces, drops, ts); // R3
-    } else {
-      collectUserContent(entry, pieces, drops, ts); // R4/R5/R6/R10/R11
-      for (const decision of extractDecisions(entry)) pieces.push(decision); // R7
-    }
-
-    if (pieces.length > 0) {
-      messages.push({ timestamp: ts ?? "", text: pieces.join("\n\n") });
+    const text = humanEntryText(entry, drops, ts);
+    if (text !== null) {
+      messages.push({ timestamp: ts ?? "", text });
     }
   }
 
   return { messages, drops, badLines };
+}
+
+/**
+ * Collect and join the surviving human pieces of ONE already-admitted (post-R1
+ * admission, post-R2 rejection) `user` or `attachment` entry, applying
+ * R3–R7/R10/R11. Returns the joined text (pieces separated by a blank line) or
+ * `null` when nothing human survived.
+ *
+ * Extracted so {@link extractMessages} and {@link extractTimeline} produce
+ * byte-identical human-message text — the dedupe key and the anaphora↔export
+ * index alignment (§5.5, flaw 7) both depend on the two paths agreeing exactly.
+ */
+function humanEntryText(
+  entry: Record<string, unknown>,
+  drops: Drop[],
+  ts: string | undefined,
+): string | null {
+  const pieces: string[] = [];
+  if (entry.type === "attachment") {
+    collectAttachment(entry, pieces, drops, ts); // R3
+  } else {
+    collectUserContent(entry, pieces, drops, ts); // R4/R5/R6/R10/R11
+    for (const decision of extractDecisions(entry)) pieces.push(decision); // R7
+  }
+  return pieces.length > 0 ? pieces.join("\n\n") : null;
+}
+
+/**
+ * A single event on a session file's linear timeline (PLAN §5.5). Beyond the
+ * human turns {@link extractMessages} surfaces, the anaphora pass needs the
+ * assistant's side of the conversation to resolve what short human turns like
+ * "yes" or "option 2" actually referred to:
+ *   - `human`:     a human turn (text is identical to {@link extractMessages});
+ *   - `assistant`: an assistant *text* turn (the antecedent candidate);
+ *   - `plan`:      an `ExitPlanMode` tool_use — what a bare "yes" approved;
+ *   - `question`:  an `AskUserQuestion` tool_use, rendered compactly.
+ *
+ * Events are in file order. Timestamps are copied from the source entry (""
+ * when absent, tolerated as elsewhere).
+ */
+export type TimelineEvent =
+  | { kind: "human"; timestamp: string; text: string }
+  | { kind: "assistant"; timestamp: string; text: string }
+  | { kind: "plan"; timestamp: string; text: string }
+  | { kind: "question"; timestamp: string; text: string };
+
+/**
+ * Render an `AskUserQuestion` tool_use `input` into a compact one-liner surface.
+ * Assumed shape (tolerated variants noted):
+ *   input.questions: [ { question: string, header?: string,
+ *                        options: ({ label: string, ... } | string)[],
+ *                        multiSelect?: boolean }, … ]
+ * Each question becomes `"<question> [<opt>, <opt>, …]"`; options may be plain
+ * strings OR objects with a `label`. Missing/blank questions are skipped;
+ * multiple questions are newline-joined.
+ */
+function renderQuestion(input: unknown): string {
+  if (!isRecord(input)) return "";
+  const questions = input.questions;
+  if (!Array.isArray(questions)) return "";
+  const lines: string[] = [];
+  for (const q of questions) {
+    if (!isRecord(q)) continue;
+    const question = typeof q.question === "string" ? q.question.trim() : "";
+    if (question === "") continue;
+    const labels: string[] = [];
+    if (Array.isArray(q.options)) {
+      for (const opt of q.options) {
+        if (typeof opt === "string") {
+          const label = opt.trim();
+          if (label !== "") labels.push(label);
+        } else if (isRecord(opt) && typeof opt.label === "string") {
+          const label = opt.label.trim();
+          if (label !== "") labels.push(label);
+        }
+      }
+    }
+    lines.push(labels.length > 0 ? `${question} [${labels.join(", ")}]` : question);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Emit the timeline events of ONE assistant entry, in content-block order.
+ *
+ * Assistant `message.content` is a string OR an array of blocks. `{type:'text'}`
+ * blocks accumulate into a single `assistant` event; an `ExitPlanMode` /
+ * `AskUserQuestion` `{type:'tool_use'}` block flushes any buffered text FIRST
+ * (so the text that introduced the tool call precedes it chronologically) and
+ * then emits the `plan` / `question` event. Assumed tool_use shapes:
+ *   { type:'tool_use', name:'ExitPlanMode',    input:{ plan: string } }
+ *   { type:'tool_use', name:'AskUserQuestion', input:{ questions:[…] } }
+ * Unknown tool_use names are ignored (tolerant parsing, §5.9).
+ */
+function assistantEvents(entry: Record<string, unknown>, ts: string): TimelineEvent[] {
+  const message = entry.message;
+  if (!isRecord(message)) return [];
+  const content = message.content;
+  const events: TimelineEvent[] = [];
+
+  if (typeof content === "string") {
+    const text = content.trim();
+    if (text !== "") events.push({ kind: "assistant", timestamp: ts, text });
+    return events;
+  }
+  if (!Array.isArray(content)) return events;
+
+  let buffer: string[] = [];
+  const flush = () => {
+    const text = buffer.join("\n").trim();
+    if (text !== "") events.push({ kind: "assistant", timestamp: ts, text });
+    buffer = [];
+  };
+
+  for (const block of content) {
+    if (!isRecord(block)) continue;
+    if (block.type === "text") {
+      if (typeof block.text === "string") buffer.push(block.text);
+    } else if (block.type === "tool_use") {
+      if (block.name === "ExitPlanMode") {
+        flush();
+        const plan =
+          isRecord(block.input) && typeof block.input.plan === "string" ? block.input.plan : "";
+        events.push({ kind: "plan", timestamp: ts, text: plan });
+      } else if (block.name === "AskUserQuestion") {
+        flush();
+        events.push({ kind: "question", timestamp: ts, text: renderQuestion(block.input) });
+      }
+    }
+  }
+  flush();
+  return events;
+}
+
+/**
+ * Build a session file's linear timeline of human turns, assistant text turns,
+ * and pending plan/question surfaces (PLAN §5.5, consumed by core/anaphora.ts
+ * and core/outcome.ts). Same tolerant parsing as {@link extractMessages}:
+ * blank/corrupt lines are skipped, unknown fields ignored.
+ *
+ * R2 rejection is applied to EVERY entry — not just `user`/`attachment` — so a
+ * subagent/sidechain (`isSidechain`), meta, or sdk-automation assistant turn can
+ * NEVER become an antecedent (flaw 8 / R2 kept single-sourced). Human-turn text
+ * is produced by the SAME {@link humanEntryText} the exporter uses, so timeline
+ * human turns align 1:1 (by timestamp+text) with the deduped, exported corpus.
+ */
+export function extractTimeline(lines: string[]): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+  const scratchDrops: Drop[] = []; // timeline callers do not consume drops.
+
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed)) continue;
+
+    const entry = parsed;
+    const ts = typeof entry.timestamp === "string" ? entry.timestamp : "";
+
+    // R2 — rejection first, over ALL entry types (single-sourced).
+    if (rejectReason(entry) !== null) continue;
+
+    if (entry.type === "user" || entry.type === "attachment") {
+      const text = humanEntryText(entry, scratchDrops, ts === "" ? undefined : ts);
+      if (text !== null) events.push({ kind: "human", timestamp: ts, text });
+    } else if (entry.type === "assistant") {
+      for (const event of assistantEvents(entry, ts)) events.push(event);
+    }
+    // Other entry types (summary/system/…) are not timeline events.
+  }
+
+  return events;
 }
