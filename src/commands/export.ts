@@ -2,15 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Writable } from "node:stream";
 import { defineCommand } from "citty";
-import { type AnaphoraRecord, buildAnaphora } from "../core/anaphora.js";
+import {
+  type AnaphoraRecord,
+  buildAnaphora,
+  SHORT_TURN_MAX_WORDS,
+  TAIL_CHARS,
+} from "../core/anaphora.js";
 import { buildCorpus, type Corpus, type CorpusSession, type DedupeInput } from "../core/dedupe.js";
 import { discoverProjects } from "../core/discover.js";
-import { buildOutcome, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
+import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
+import { buildOutcome, FINAL_TURNS, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
 import { exportFileName, renderExport } from "../core/render.js";
 import { dim, hint } from "../ui/style.js";
-import { resolvePaths, sharedArgs } from "./_shared.js";
+import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 
-/** One entry of `exports/manifest.json` (§5.3). */
+/** One entry of `exports/manifest.json`. */
 export interface ManifestEntry {
   export: string;
   source: string;
@@ -25,7 +31,7 @@ export interface ManifestEntry {
 export interface ExportArgs {
   home?: string;
   "claude-dir"?: string;
-  /** Case-insensitive substring filter on project short name (R9). */
+  /** Case-insensitive substring filter on project short name. */
   project?: string;
   /** Minimum surviving human messages for a session to be exported (default 1). */
   "min-messages"?: string;
@@ -40,11 +46,11 @@ export interface ExportStats {
   exportedSessions: number;
   /** Total surviving messages across exported sessions. */
   totalMessages: number;
-  /** Messages dropped as cross-file fork copies (R8). */
+  /** Messages dropped as cross-file fork copies (dedupe rule R8). */
   duplicatesDropped: number;
   /** Sessions excluded by the `--project` filter. */
   skippedByFilter: number;
-  /** Sessions with zero surviving human messages (skipped naturally, R9). */
+  /** Sessions with zero surviving human messages (skipped naturally). */
   zeroMessageSessions: number;
   /** Sessions with some messages but fewer than `--min-messages`. */
   belowMinMessages: number;
@@ -52,22 +58,18 @@ export interface ExportStats {
   readErrors: number;
   /** Corrupt JSONL lines skipped across all sessions. */
   badLines: number;
-  /** Short human turns (≤15 words) attached with anaphora context (§5.5). */
+  /** Short human turns (≤15 words) attached with anaphora context. */
   shortTurns: number;
   /** Of those, how many had a pending plan/question decision surface. */
   shortTurnsWithDecision: number;
-  /** Sessions for which bounded outcome evidence was captured (= exported). */
+  /** Sessions that captured a non-empty final assistant tail (real outcome evidence). */
   outcomeSessions: number;
   /** Absolute path to the exports directory that was written. */
   exportsDir: string;
+  /** Stale `.md` files pruned (unfiltered runs only) because their session is gone. */
+  prunedExports: number;
   /** Written markdown basenames, sorted (manifest.json excluded). */
   files: string[];
-}
-
-/** Parse `--min-messages`, defaulting to 1 and clamping sub-1 / invalid to 1. */
-function parseMinMessages(raw: string | undefined): number {
-  const parsed = Number.parseInt(raw ?? "1", 10);
-  return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
 }
 
 /** Whitespace-collapse and cap a short human turn for a one-line verbose row. */
@@ -83,18 +85,21 @@ function projectMatches(shortName: string, filter: string): boolean {
 
 /**
  * The export command core. Reads only the claude dir; writes only under
- * `<home>/exports`. Returns stats (never throws on individual bad files/lines,
- * §5.9). Deterministic and idempotent: same input → byte-identical output.
+ * `<home>/exports`. Returns stats — individual bad files/lines are tolerated
+ * and counted, never thrown. Deterministic and idempotent: same input →
+ * byte-identical output.
  */
 export function runExport(opts: ExportArgs): ExportStats {
   const out = opts.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
 
   const { home, claudeDir } = resolvePaths(opts);
-  const minMessages = parseMinMessages(opts["min-messages"]);
+  const minMessages = parseClampedInt(opts["min-messages"], { fallback: 1, min: 1 });
   const exportsDir = path.join(home, "exports");
 
-  const projects = discoverProjects(claudeDir);
+  // Entry counts are unused by export (content is read below); skip the count
+  // read so each session file is read at most once for this command.
+  const projects = discoverProjects(claudeDir, { countEntries: false });
 
   // Apply the --project filter; count the sessions it excludes for reporting.
   let skippedByFilter = 0;
@@ -129,8 +134,8 @@ export function runExport(opts: ExportArgs): ExportStats {
     }
   }
 
-  // ONE shared dedupe pass (R8) — anaphora/outcome reuse this exact corpus so
-  // their indices align with the rendered export (§5.5, flaw 7 disposition).
+  // ONE shared dedupe pass (rule R8) — anaphora/outcome reuse this exact
+  // corpus so their record indices align with the rendered export exactly.
   const corpus = buildCorpus(inputs);
 
   // Raw lines per session for the anaphora/outcome timeline walk (keyed by the
@@ -166,6 +171,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   let totalMessages = 0;
   let shortTurns = 0;
   let shortTurnsWithDecision = 0;
+  let outcomeSessions = 0;
   for (const session of eligible) {
     const file = exportFileName(session.project, session.sessionId, used);
     writes.push({ file, content: renderExport(session) });
@@ -183,7 +189,9 @@ export function runExport(opts: ExportArgs): ExportStats {
     const lines = linesBySource.get(session.sourcePath) ?? [];
     const records = buildAnaphora(session, lines);
     anaphoraByFile[file] = records;
-    outcomesByFile[file] = buildOutcome(session, lines);
+    const outcome = buildOutcome(session, lines);
+    outcomesByFile[file] = outcome;
+    if (outcome.final_assistant_tail !== "") outcomeSessions++;
     shortTurns += records.length;
     shortTurnsWithDecision += records.filter((r) => r.decision_kind !== null).length;
     attached.push({ file, project: session.project, sessionId: session.sessionId, records });
@@ -193,7 +201,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   manifest.sort((a, b) => a.export.localeCompare(b.export));
 
   // Deterministic (sorted-by-export-name) anaphora + outcome objects. outcomes
-  // gets a leading `_note` labeling the assistant text (F11/§5.5).
+  // gets a leading `_note` labeling the assistant text as machine-authored.
   const anaphoraOut: Record<string, AnaphoraRecord[]> = {};
   for (const file of Object.keys(anaphoraByFile).sort()) {
     anaphoraOut[file] = anaphoraByFile[file] ?? [];
@@ -203,23 +211,39 @@ export function runExport(opts: ExportArgs): ExportStats {
     outcomesOut[file] = outcomesByFile[file];
   }
 
-  // Write to disk: mkdir -p, per-session markdown, then the JSON artifacts.
-  fs.mkdirSync(exportsDir, { recursive: true });
+  // Write to disk: mkdir -p (owner-only), per-session markdown, then the JSON
+  // artifacts — all with owner-only permissions (they can contain secrets).
+  mkdirPrivate(exportsDir);
   for (const { file, content } of writes) {
-    fs.writeFileSync(path.join(exportsDir, file), content);
+    writeFilePrivate(path.join(exportsDir, file), content);
   }
-  fs.writeFileSync(
+  writeFilePrivate(
     path.join(exportsDir, "manifest.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
-  fs.writeFileSync(
+  writeFilePrivate(
     path.join(exportsDir, "anaphora.json"),
     `${JSON.stringify(anaphoraOut, null, 2)}\n`,
   );
-  fs.writeFileSync(
+  writeFilePrivate(
     path.join(exportsDir, "outcomes.json"),
     `${JSON.stringify(outcomesOut, null, 2)}\n`,
   );
+
+  // Prune stale exports: `.md` files from a previous run whose session no
+  // longer exists (deleted/renamed under ~/.claude). ONLY on an unfiltered,
+  // default-threshold run — otherwise the current write set is a deliberate
+  // subset and the "missing" files are valid entries from other scopes.
+  let prunedExports = 0;
+  if (!opts.project && minMessages === 1) {
+    const kept = new Set(writes.map((w) => w.file));
+    for (const f of fs.readdirSync(exportsDir)) {
+      if (f.endsWith(".md") && !kept.has(f)) {
+        fs.rmSync(path.join(exportsDir, f), { force: true });
+        prunedExports++;
+      }
+    }
+  }
 
   const files = writes.map((w) => w.file).sort();
   const stats: ExportStats = {
@@ -233,8 +257,9 @@ export function runExport(opts: ExportArgs): ExportStats {
     badLines,
     shortTurns,
     shortTurnsWithDecision,
-    outcomeSessions: eligible.length,
+    outcomeSessions,
     exportsDir,
+    prunedExports,
     files,
   };
 
@@ -266,7 +291,7 @@ function reportExport(
       `${stats.duplicatesDropped} duplicates dropped) → ${stats.exportsDir}`,
   );
 
-  // Anaphora + outcome accounting (§5.5 / Task 5 demo line).
+  // Anaphora + outcome accounting.
   write(
     `${stats.shortTurns} short turns attached ` +
       `(${stats.shortTurnsWithDecision} had a pending plan/question); ` +
@@ -291,9 +316,18 @@ function reportExport(
   if (stats.badLines > 0) {
     write(dim(`  ${stats.badLines} corrupt JSONL line(s) skipped`));
   }
+  if (stats.prunedExports > 0) {
+    write(dim(`  ${stats.prunedExports} stale export(s) pruned (session no longer exists)`));
+  }
 
   if (opts.verbose) {
     write();
+    write(
+      dim(
+        `bounded evidence: short turns ≤ ${SHORT_TURN_MAX_WORDS} words get context; ` +
+          `antecedent/assistant tails ≤ ${TAIL_CHARS} chars; last ${FINAL_TURNS} human turns captured per session.`,
+      ),
+    );
     // Every session the corpus saw, with its extractor drops and dedupe count.
     const exportedIds = new Set(eligible.map((s) => s.sessionId));
     for (const session of corpus.sessions) {

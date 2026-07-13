@@ -181,6 +181,67 @@ describe("runClaude — schema-in-prompt fallback", () => {
   });
 });
 
+describe("runClaude — tool disabling capability matrix", () => {
+  const INSTRUCTION = "Do not use any tools";
+
+  it('tools-empty: passes --tools "" and NO instruction', async () => {
+    const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+    await runClaude(
+      {
+        prompt: "p",
+        schema: DigestSchema,
+        capabilities: { jsonSchema: true, disableTools: "tools-empty" },
+      },
+      io,
+    );
+    expect(calls[0]?.args).toContain("--tools");
+    expect(calls[0]?.input).not.toContain(INSTRUCTION);
+  });
+
+  it("disallowed: NO --tools flag but DOES add the instruction (was a silent no-op)", async () => {
+    const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+    await runClaude(
+      {
+        prompt: "p",
+        schema: DigestSchema,
+        capabilities: { jsonSchema: true, disableTools: "disallowed" },
+      },
+      io,
+    );
+    expect(calls[0]?.args).not.toContain("--tools");
+    expect(calls[0]?.input).toContain(INSTRUCTION);
+  });
+
+  it("none: NO --tools flag but DOES add the instruction", async () => {
+    const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+    await runClaude(
+      {
+        prompt: "p",
+        schema: DigestSchema,
+        capabilities: { jsonSchema: true, disableTools: "none" },
+      },
+      io,
+    );
+    expect(calls[0]?.args).not.toContain("--tools");
+    expect(calls[0]?.input).toContain(INSTRUCTION);
+  });
+
+  it("disableTools:false suppresses both flag and instruction", async () => {
+    const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+    await runClaude(
+      {
+        prompt: "p",
+        schema: DigestSchema,
+        disableTools: false,
+        capabilities: { jsonSchema: true, disableTools: "tools-empty" },
+      },
+      io,
+    );
+    expect(calls[0]?.args).not.toContain("--tools");
+    expect(calls[0]?.input).not.toContain(INSTRUCTION);
+  });
+});
+
 describe("runClaude — timeout", () => {
   it("throws a typed timeout error when the spawn times out", async () => {
     const timedOut: SpawnResult = {
@@ -205,9 +266,28 @@ describe("runClaude — timeout", () => {
 
   it("defaultIo.spawn actually kills a process that exceeds the timeout", async () => {
     const start = Date.now();
-    const res = await defaultIo.spawn("sleep", ["5"], { input: "", timeoutMs: 150 });
+    // Portable long-running child (no POSIX `sleep`, so the suite runs on Windows
+    // too, L12). SIGTERM should stop it well before the SIGKILL grace elapses.
+    const res = await defaultIo.spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      input: "",
+      timeoutMs: 150,
+    });
     expect(res.timedOut).toBe(true);
-    expect(Date.now() - start).toBeLessThan(2000);
+    expect(Date.now() - start).toBeLessThan(4000);
+  });
+
+  it("swallows EPIPE when the child exits before the prompt is fully written", async () => {
+    // A child that exits immediately without reading stdin; writing a large
+    // prompt to its closed stdin must NOT crash the process.
+    const big = "x".repeat(2_000_000);
+    const res = await defaultIo.spawn(process.execPath, ["-e", "process.exit(1)"], {
+      input: big,
+      timeoutMs: 5_000,
+    });
+    // We only require that the promise resolves (no uncaught EPIPE). Exit code is
+    // reported for the caller to classify.
+    expect(res.timedOut).toBe(false);
+    expect(res.code).toBe(1);
   });
 });
 

@@ -123,17 +123,29 @@ function defaultWhich(bin: string): string | null {
   return null;
 }
 
+/** Grace period between SIGTERM and SIGKILL on timeout. */
+export const KILL_GRACE_MS = 2_000;
+
 function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const child = nodeSpawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      // Ask politely first so the child can flush; force-kill only if it lingers.
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+      killTimer.unref?.(); // never keep the event loop alive on our account
     }, opts.timeoutMs);
+
+    const clearTimers = () => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
 
     child.stdout?.on("data", (d: Buffer) => {
       stdout += d.toString();
@@ -142,14 +154,20 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
       stderr += d.toString();
     });
     child.on("error", (err) => {
-      clearTimeout(timer);
+      clearTimers();
       reject(err);
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      clearTimers();
       resolve({ code, signal, stdout, stderr, timedOut });
     });
 
+    // If `claude` exits early (auth error, bad flags, crash) while a large prompt
+    // is still buffered, writing to its stdin raises EPIPE. With no listener that
+    // becomes an uncaught exception and takes the whole process down mid-distill,
+    // bypassing the per-session failure containment. Swallow it: the `close`
+    // handler already reports the real failure via exit code + stderr.
+    child.stdin?.on("error", () => {});
     child.stdin?.write(opts.input);
     child.stdin?.end();
   });
@@ -288,9 +306,14 @@ function buildPrompt(caps: Capabilities, opts: RunClaudeOptions<unknown>): strin
     const json = JSON.stringify(toJsonSchema(opts.schema));
     prompt += `\n\nRespond ONLY with JSON matching this schema:\n${json}`;
   }
-  // Instruction-level tool disabling when no flag exists.
+  // Instruction-level tool disabling whenever we can't do it with the `--tools`
+  // flag. Covers BOTH "none" (no tool flag at all) AND "disallowed": a CLI that
+  // advertises only `--disallowedTools` has no portable deny-ALL value across
+  // versions, so the flag path can't be relied on — the instruction is always
+  // honored by the model. Leaving "disallowed" with neither flag nor
+  // instruction would silently run distill stages with tools enabled.
   const disableTools = opts.disableTools ?? true;
-  if (disableTools && caps.disableTools === "none") {
+  if (disableTools && caps.disableTools !== "tools-empty") {
     prompt += "\n\nDo not use any tools; answer directly from the content provided.";
   }
   return prompt;

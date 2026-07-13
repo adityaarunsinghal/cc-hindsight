@@ -1,10 +1,10 @@
 /**
- * core/dedupe.ts — R8 global cross-file dedupe (PLAN §5.4, flaw 7 in §4.2).
+ * core/dedupe.ts — rule R8: global cross-file dedupe.
  *
- * THE SINGLE SOURCE OF TRUTH for the deduped corpus. Export, and (in Task 5)
- * the anaphora and outcome-evidence passes, all consume ONE `buildCorpus` pass
- * so the per-session message `index` aligns exactly with the exported markdown
- * — no O(N²) re-export per alignment (§5.5, first paragraph).
+ * THE SINGLE SOURCE OF TRUTH for the deduped corpus. Export, anaphora, and the
+ * outcome-evidence pass all consume ONE `buildCorpus` pass, so the per-session
+ * message `index` aligns exactly with the exported markdown — no O(N²)
+ * re-export per alignment.
  *
  * Why dedupe at all: Claude Code copies prior history into a NEW session file
  * on fork/resume, so the same (timestamp, text) human message appears in
@@ -37,8 +37,8 @@ export interface DedupeInput {
  * A surviving human message in the deduped corpus.
  *
  * `index` is the 0-based position within THIS session's surviving (post-dedupe)
- * messages. It is THE alignment key: the anaphora and outcome passes (Task 5)
- * reference messages by `index`, and render.ts emits them in `index` order, so
+ * messages. It is THE alignment key: the anaphora and outcome passes reference
+ * messages by `index`, and render.ts emits them in `index` order, so
  * `anaphora.json` records line up byte-for-byte with the exported markdown.
  */
 export interface DedupedMessage {
@@ -54,7 +54,7 @@ export interface CorpusSession {
   sourcePath: string;
   /** Ordered, post-dedupe surviving messages (may be empty → export skips it). */
   messages: DedupedMessage[];
-  /** Every dropped piece/entry from extraction, for `--verbose` (flaw 6). */
+  /** Every dropped piece/entry from extraction, reported under `--verbose`. */
   drops: Drop[];
   /** Corrupt/unparseable JSONL lines skipped during extraction. */
   badLines: number;
@@ -109,8 +109,8 @@ function earliestTimestamp(messages: ExtractedMessage[]): string {
  * permutation of the input (asserted in test/dedupe.test.ts).
  *
  * A zero-surviving-message session stays in the corpus with an empty
- * `messages` array — export skips it naturally (R9), and Task 5 still records
- * that it was seen.
+ * `messages` array — export skips it naturally (rule R9), and the anaphora and
+ * outcome passes still record that it was seen.
  */
 export function buildCorpus(input: DedupeInput[]): Corpus {
   // Extract once per session, remembering each session's ordering timestamp.

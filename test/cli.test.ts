@@ -1,13 +1,30 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runMain } from "citty";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../src/main.js";
+import { epipeHandler } from "../src/ui/epipe.js";
 
-const EXPECTED = ["scan", "export", "distill", "list", "show", "copy", "status", "preferences"];
+const EXPECTED = [
+  "scan",
+  "export",
+  "distill",
+  "list",
+  "show",
+  "copy",
+  "edit",
+  "rate",
+  "prune",
+  "status",
+  "preferences",
+];
 
 describe("cc-hindsight root command", () => {
   it("has the right name and version", () => {
     const meta = main.meta as { name: string; version: string };
     expect(meta.name).toBe("cc-hindsight");
-    expect(meta.version).toBe("0.1.0");
+    expect(meta.version).toBe("0.1.1");
   });
 
   it("registers all 8 subcommands", () => {
@@ -23,5 +40,74 @@ describe("cc-hindsight root command", () => {
       expect(cmd.meta?.name).toBe(name);
       expect(typeof cmd.run).toBe("function");
     }
+  });
+});
+
+// --- dispatch through citty: the heuristic that decides default-scan vs.
+// subcommand must survive flag VALUES that look like tokens. ------------
+
+describe("root dispatch", () => {
+  // A fixture claude dir with no `projects` → runScan prints the friendly
+  // "No Claude Code projects found" line. We assert scan ran (or didn't) by
+  // watching console.log, without touching the real ~/.claude.
+  let logs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let emptyClaudeDir: string;
+  const tmp: string[] = [];
+
+  beforeEach(() => {
+    logs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...p: unknown[]) => {
+      logs.push(p.map(String).join(" "));
+    });
+    emptyClaudeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cch-dispatch-"));
+    tmp.push(emptyClaudeDir);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  const ranScan = () => logs.join("\n").includes("No Claude Code projects found");
+
+  it("runs the default scan on a bare invocation", async () => {
+    await runMain(main, { rawArgs: ["--claude-dir", emptyClaudeDir] });
+    expect(ranScan()).toBe(true);
+  });
+
+  it("runs the default scan when the only args are flags WITH values", async () => {
+    // A naive raw-args heuristic ("first non-dash token = subcommand") would
+    // mistake the VALUE `emptyClaudeDir` for a subcommand and skip the scan —
+    // dispatch must rely on parsed positionals instead.
+    await runMain(main, { rawArgs: ["--home", emptyClaudeDir, "--claude-dir", emptyClaudeDir] });
+    expect(ranScan()).toBe(true);
+  });
+
+  it("does NOT run the default scan when an explicit subcommand is given", async () => {
+    // `status` against a home with nothing → prints funnel, never the scan line.
+    await runMain(main, {
+      rawArgs: ["status", "--home", emptyClaudeDir, "--claude-dir", emptyClaudeDir],
+    });
+    expect(ranScan()).toBe(false);
+    expect(logs.join("\n")).toContain("discovered");
+  });
+});
+
+// --- EPIPE helper (extracted from cli.ts for testability) -------------------
+
+describe("epipeHandler", () => {
+  it("exits 0 on EPIPE", () => {
+    const exit = vi.fn() as unknown as (code: number) => never;
+    const err = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+    epipeHandler(exit)(err);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("re-throws any non-EPIPE error", () => {
+    const exit = vi.fn() as unknown as (code: number) => never;
+    const err = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    expect(() => epipeHandler(exit)(err)).toThrow("disk full");
+    expect(exit).not.toHaveBeenCalled();
   });
 });

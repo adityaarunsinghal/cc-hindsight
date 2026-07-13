@@ -1,22 +1,24 @@
 import type { AnaphoraRecord } from "../../core/anaphora.js";
+import { TAIL_CHARS } from "../../core/anaphora.js";
+import { middleCut } from "../../core/budget.js";
 import type { ClusterTask, Digest } from "../schemas.js";
-import { capContent } from "./digest.js";
 
 /**
- * Stage 3 — author prompt builder (PLAN §5.6): the heart of the tool.
+ * Stage 3 — author prompt builder: the heart of the tool.
  *
  * One call per task: the member sessions' human messages, resolved anaphora
  * records, and outcome classifications go in; the realistic ideal first
  * prompt — everything the human knew and wanted at t=0 but didn't say,
  * written in their own voice — comes out, plus observed durable preferences.
  *
- * The contract encoded below is pinned by prompt-contract tests (§5.10);
- * bump `AUTHOR_PROMPT_VERSION` on any meaningful change.
+ * Member/task input budgeting is the pipeline's job (core/budget.ts); this
+ * builder inlines whatever content it is handed, already kept within budget
+ * (or the task was blocked / cut upstream).
+ *
+ * The contract encoded below is pinned by the prompt-contract tests in
+ * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change.
  */
 export const AUTHOR_PROMPT_VERSION = 1;
-
-/** Per-member cap on inlined export content (author calls carry N members). */
-export const AUTHOR_MEMBER_CAP = 30_000;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
@@ -41,10 +43,11 @@ function renderAnaphora(records: AnaphoraRecord[]): string[] {
   for (const r of records) {
     if (!r.antecedent && !r.decision_kind) continue;
     lines.push(`  - at message #${r.index} the human said: ${JSON.stringify(r.human_text)}`);
+    const decision = r.decision_text ? middleCut(r.decision_text, TAIL_CHARS).text : "";
     if (r.decision_kind === "plan") {
-      lines.push(`    this approved a proposed plan:\n${indent(r.decision_text ?? "", 6)}`);
+      lines.push(`    this approved a proposed plan:\n${indent(decision, 6)}`);
     } else if (r.decision_kind === "question") {
-      lines.push(`    this answered:\n${indent(r.decision_text ?? "", 6)}`);
+      lines.push(`    this answered:\n${indent(decision, 6)}`);
     }
     if (r.antecedent) {
       lines.push(`    tail of the assistant turn it replied to (MACHINE-AUTHORED, for
@@ -69,7 +72,7 @@ function renderMember(member: AuthorMemberInput): string {
       `digest: goal=${JSON.stringify(member.digest.goal)}; outcome=${member.digest.outcome}`,
     );
   }
-  parts.push("human messages:", capContent(member.content, AUTHOR_MEMBER_CAP));
+  parts.push("human messages:", member.content);
   const anaphora = member.anaphora ? renderAnaphora(member.anaphora) : [];
   if (anaphora.length > 0) {
     parts.push("resolved short replies (what terse turns actually referred to):", ...anaphora);
@@ -79,7 +82,7 @@ function renderMember(member: AuthorMemberInput): string {
 }
 
 /**
- * Build the stage-3 authoring prompt implementing the §5.6 contract:
+ * Build the stage-3 authoring prompt implementing the authoring contract:
  * the "knowable at t=0" test, transform-don't-leak, the effort budget,
  * inferred voice, verbatim-decision honoring, outcome-aware confidence,
  * and preference extraction with evidence.

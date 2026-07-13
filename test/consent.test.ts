@@ -2,19 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable, Writable } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  askYesNo,
   type ConsentResult,
   confirm,
   type DistillPlan,
   renderPlan,
 } from "../src/claude/consent.js";
+import { parseClampedInt } from "../src/commands/_shared.js";
 import { computePlan, type ManifestEntry, runDistill } from "../src/commands/distill.js";
 import type { RunnerFn } from "../src/distill/pipeline.js";
 
 // --- helpers ---------------------------------------------------------------
 
-/** Captured text is ANSI-stripped: this file pins the §5.7 copy, not the color. */
+/** Captured text is ANSI-stripped: this file pins the disclosure copy, not the color. */
 function captureOutput(): { out: Writable; text: () => string } {
   const chunks: string[] = [];
   const out = new Writable({
@@ -23,12 +26,19 @@ function captureOutput(): { out: Writable; text: () => string } {
       cb();
     },
   });
-  return { out, text: () => chunks.join("").replace(/\u001b\[[0-9;]*m/g, "") };
+  return { out, text: () => stripVTControlCharacters(chunks.join("")) };
 }
 
 function inputWith(line: string): Readable {
   const pt = new PassThrough();
   pt.end(line);
+  return pt;
+}
+
+/** An input stream that ends immediately with no data (EOF, e.g. `< /dev/null`). */
+function eofInput(): Readable {
+  const pt = new PassThrough();
+  pt.end();
   return pt;
 }
 
@@ -41,13 +51,13 @@ function forbiddenInput(): Readable {
   });
 }
 
-// --- renderPlan (exact §5.7 copy) ------------------------------------------
+// --- renderPlan (the exact disclosure copy) ------------------------------------------
 
 /** The copy is the contract; color is presentation. Strip ANSI, pin the bytes. */
-const strip = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "");
+const strip = (s: string) => stripVTControlCharacters(s);
 
 describe("renderPlan", () => {
-  it("matches the exact §5.7 disclosure block (right-aligned counts)", () => {
+  it("matches the exact disclosure block (right-aligned counts)", () => {
     const expected = [
       "  distill will invoke your local `claude` CLI (your subscription/credits):",
       "    • 14 session digests",
@@ -78,6 +88,40 @@ describe("renderPlan", () => {
     expect(lines[1]).toBe("    •  5 session digests");
     expect(lines[2]).toBe("    •  1 clustering call");
     expect(lines[3]).toContain("    • ~5 oneshot authoring calls");
+  });
+
+  it("shows the extreme-cut disclosure line when a budget is set and sessions are oversized", () => {
+    const out = strip(
+      renderPlan({
+        digests: 3,
+        cluster: 1,
+        authorEstimate: 1,
+        budget: 1000,
+        truncate: "extreme",
+        oversized: [{ export: "big.md", chars: 5000 }],
+      }),
+    );
+    expect(out).toContain("1 session(s) exceed the 1000-char budget and will be cut middle-out");
+  });
+
+  it("reassures that every byte reaches the model when a budget is set and nothing is oversized", () => {
+    const out = strip(
+      renderPlan({
+        digests: 3,
+        cluster: 1,
+        authorEstimate: 1,
+        budget: 400000,
+        truncate: "never",
+        oversized: [],
+      }),
+    );
+    expect(out).toContain("Every exported byte will reach the model");
+  });
+
+  it("omits the coverage line entirely when no budget context is provided (existing callers)", () => {
+    const out = strip(renderPlan({ digests: 5, cluster: 1, authorEstimate: 5 }));
+    expect(out).not.toContain("budget");
+    expect(out).not.toContain("reach the model");
   });
 });
 
@@ -131,6 +175,21 @@ describe("confirm", () => {
     const result = await confirm(PLAN, { input: inputWith("n\n"), output: cap.out });
     expect(result).toBe("declined");
   });
+
+  it("EOF (closed stdin, no answer) declines instead of hanging", async () => {
+    const cap = captureOutput();
+    // Must resolve — a never-resolving promise would hang the test runner.
+    const result = await confirm(PLAN, { input: eofInput(), output: cap.out });
+    expect(result).toBe("declined");
+  });
+});
+
+describe("askYesNo — EOF handling", () => {
+  it("treats closed stdin as No (declines the --fresh-style gate)", async () => {
+    const cap = captureOutput();
+    const answer = await askYesNo("Proceed?", { input: eofInput(), output: cap.out });
+    expect(answer).toBe(false);
+  });
 });
 
 // --- distill command wiring (consent + count math) -------------------------
@@ -163,6 +222,23 @@ afterEach(() => {
     const d = tmpDirs.pop();
     if (d) fs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+describe("parseClampedInt (shared min-* parser, L5)", () => {
+  it("min-messages semantics: fallback 1, min 1", () => {
+    expect(parseClampedInt(undefined, { fallback: 1, min: 1 })).toBe(1);
+    expect(parseClampedInt("3", { fallback: 1, min: 1 })).toBe(3);
+    expect(parseClampedInt("0", { fallback: 1, min: 1 })).toBe(1);
+    expect(parseClampedInt("abc", { fallback: 1, min: 1 })).toBe(1);
+  });
+
+  it("min-substance semantics: '0'->1 and '-1'->1 (no parseInt||default surprises)", () => {
+    expect(parseClampedInt(undefined, { fallback: 2, min: 1 })).toBe(2);
+    expect(parseClampedInt("0", { fallback: 2, min: 1 })).toBe(1);
+    expect(parseClampedInt("-1", { fallback: 2, min: 1 })).toBe(1);
+    expect(parseClampedInt("abc", { fallback: 2, min: 1 })).toBe(2);
+    expect(parseClampedInt("5", { fallback: 2, min: 1 })).toBe(5);
+  });
 });
 
 describe("computePlan (count math)", () => {
@@ -244,6 +320,15 @@ describe("runDistill", () => {
     expect(cap.text()).toContain("declined");
   });
 
+  it("exits 2 (declined) on EOF stdin without --yes, never hanging", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    // Real consent gate (no confirm spy), closed stdin: must resolve to declined.
+    const code = await runDistill({ home }, { output: cap.out, input: eofInput() });
+    expect(code).toBe(2);
+    expect(cap.text()).toContain("declined");
+  });
+
   it("runs the digest stage on proceed and writes the checkpoint", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);
@@ -287,6 +372,106 @@ describe("runDistill", () => {
       "utf8",
     );
     expect(oneshot).toContain("Do the whole thing well.");
+  });
+
+  it("proceeds past a failed digest, authors the rest, and exits 1", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild a\n");
+    fs.writeFileSync(path.join(home, "exports", "b"), "### t\n\nbuild b\n");
+    const confirmSpy = async (): Promise<ConsentResult> => "proceed";
+    const digest = {
+      goal: "g",
+      deliverable: "d",
+      domain: "dom",
+      keywords: ["k"],
+      outcome: "completed",
+    };
+    const cluster = {
+      tasks: [{ slug: "the-only-task", title: "t", rationale: "r", members: ["a"] }],
+      misc: [],
+    };
+    const authored = {
+      slug: "the-only-task",
+      title: "T",
+      oneshot_markdown: "Do it.",
+      confidence: "high",
+      preferences: [],
+    };
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("build b")) throw new Error("boom-b");
+      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
+      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      return digest;
+    }) as RunnerFn;
+    const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
+    // Exit 1 because a digest failed — but only AFTER authoring the reachable work.
+    expect(code).toBe(1);
+    expect(cap.text()).toContain("failed sessions");
+    expect(cap.text()).toContain("library: 1 entry authored");
+    expect(fs.existsSync(path.join(home, "library", "the-only-task", "sources.json"))).toBe(true);
+  });
+
+  it("runs end-to-end with --no-group: one task per session, no cluster call", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild a\n");
+    fs.writeFileSync(path.join(home, "exports", "b"), "### t\n\nbuild b\n");
+    const confirmSpy = async (): Promise<ConsentResult> => "proceed";
+    const digest = {
+      goal: "g",
+      deliverable: "d",
+      domain: "dom",
+      keywords: ["k"],
+      outcome: "completed",
+    };
+    const authored = {
+      slug: "ignored-by-task-slug",
+      title: "T",
+      oneshot_markdown: "Do it.",
+      confidence: "high",
+      preferences: [],
+    };
+    let clusterCalls = 0;
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions")) {
+        clusterCalls++;
+        throw new Error("cluster must not be called under --no-group");
+      }
+      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      return digest;
+    }) as RunnerFn;
+    const code = await runDistill(
+      { home, group: false },
+      { confirm: confirmSpy, output: cap.out, runner },
+    );
+    expect(code).toBe(0);
+    expect(clusterCalls).toBe(0);
+    // One library entry per session (1 session = 1 task).
+    expect(fs.readdirSync(path.join(home, "library")).length).toBe(2);
+  });
+
+  it("refuses pre-spend (exit 1) when a session exceeds the budget under --truncate=never", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("big", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "big"), "z".repeat(5_000));
+    let confirmCalled = false;
+    const confirmSpy = async (): Promise<ConsentResult> => {
+      confirmCalled = true;
+      return "proceed";
+    };
+    const runner = (async () => {
+      throw new Error("runner must not be called");
+    }) as RunnerFn;
+    const code = await runDistill(
+      { home, "input-budget": "1000" },
+      { confirm: confirmSpy, output: cap.out, runner },
+    );
+    expect(code).toBe(1);
+    // Refused BEFORE the consent gate — nothing was spent.
+    expect(confirmCalled).toBe(false);
+    expect(cap.text()).toContain("exceed the input budget");
+    expect(cap.text()).toContain("--truncate=extreme");
   });
 
   it("--fresh declined keeps checkpoints and exits 2", async () => {
@@ -349,6 +534,27 @@ describe("runDistill", () => {
     expect(Object.keys(cp.digests)).toEqual(["a"]);
   });
 
+  it("--fresh confirmed but MAIN consent declined keeps checkpoints", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    const cpPath = path.join(home, "distill", "digests.json");
+    fs.writeFileSync(
+      cpPath,
+      JSON.stringify({ generation: "keep-me", prompt_version: 1, digests: { a: {} } }),
+    );
+    // Confirm --fresh (input "y"), then the main consent gate declines: the
+    // destructive clear must NOT have happened yet.
+    const confirmSpy = async (): Promise<ConsentResult> => "declined";
+    const code = await runDistill(
+      { home, fresh: true },
+      { confirm: confirmSpy, output: cap.out, input: inputWith("y\n") },
+    );
+    expect(code).toBe(2);
+    expect(fs.existsSync(cpPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(cpPath, "utf8")).generation).toBe("keep-me");
+  });
+
   it("surfaces a resume note when a digests checkpoint exists", async () => {
     const home = tmpHome([
       entry("a", "x", 5),
@@ -368,5 +574,27 @@ describe("runDistill", () => {
     };
     await runDistill({ home }, { confirm: confirmSpy, output: captureOutput().out });
     expect(captured?.resumeNote).toContain("2 of 4 digests already done");
+  });
+
+  it("resume note excludes checkpoint digests outside the eligible set", async () => {
+    const home = tmpHome([entry("a", "alpha", 5), entry("b", "beta", 4), entry("c", "beta", 3)]);
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    // Checkpoint holds only 'a' (project alpha).
+    fs.writeFileSync(
+      path.join(home, "distill", "digests.json"),
+      JSON.stringify({ generation: 1, digests: { a: {} } }),
+    );
+    let captured: DistillPlan | undefined;
+    const confirmSpy = async (plan: DistillPlan): Promise<ConsentResult> => {
+      captured = plan;
+      return "dry-run";
+    };
+    // Filter to beta: eligible = {b, c}; 'a' is not eligible, so nothing is
+    // "already done" for this run — no misleading resume note.
+    await runDistill(
+      { home, project: "beta" },
+      { confirm: confirmSpy, output: captureOutput().out },
+    );
+    expect(captured?.resumeNote).toBeUndefined();
   });
 });

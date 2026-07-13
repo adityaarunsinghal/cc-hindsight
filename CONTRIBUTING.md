@@ -17,8 +17,10 @@ node dist/cli.js --help
 ```
 
 Node ≥ 22 is required (we use `util.styleText` and `util.parseArgs` via citty).
-CI runs biome → typecheck → tests → build → `npm pack --dry-run` on Ubuntu and
-macOS; all of it must stay green.
+CI runs biome → typecheck → tests → build → a packed-file-list assertion
+(`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
+Supported platforms are macOS and Linux — Windows code paths exist but are
+untested.
 
 ## Ground rules
 
@@ -33,8 +35,9 @@ macOS; all of it must stay green.
 
 ## The extraction fidelity contract
 
-`src/core/extract.ts` implements eleven audited rules (R1–R11, documented in
-PLAN.md §5.4) deciding what counts as human input in Claude Code JSONL. Every
+`src/core/extract.ts` implements eleven audited rules (R1–R11, each documented
+where it is implemented) deciding what counts as human input in Claude Code
+JSONL. Every
 rule has a code comment citing the transcript shape it handles and a dedicated
 regression fixture. This is the most safety-critical code in the repo: a bug
 here silently corrupts everything downstream.
@@ -73,5 +76,11 @@ provenance in `sources.json` stays honest.
 
 ```bash
 npm test && npm run lint && npm run typecheck && npm run build
-npm pack --dry-run        # exactly LICENSE, dist/, package.json, README
+npm pack --dry-run --json > pack.json
+node scripts/check-pack.mjs pack.json   # dist/, package.json, npm-shrinkwrap.json, README, LICENSE — nothing else
 ```
+
+Runtime dependencies are exact-pinned and the transitive tree ships via
+`npm-shrinkwrap.json` — after any dependency change, re-run `npm shrinkwrap`
+and commit the result. CI actions are SHA-pinned; bump the SHA and the tag
+comment together.

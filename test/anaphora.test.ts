@@ -10,7 +10,7 @@ import {
 import { buildCorpus, type CorpusSession, type DedupeInput } from "../src/core/dedupe.js";
 import { renderExport } from "../src/core/render.js";
 
-// ---- JSONL line builders (synthetic; N5: never the real ~/.claude) ----------
+// ---- JSONL line builders (synthetic; never the real ~/.claude) ----------
 
 function userLine(timestamp: string, text: string): string {
   return JSON.stringify({ type: "user", timestamp, message: { role: "user", content: text } });
@@ -71,7 +71,7 @@ function anaphoraFor(lines: string[]): AnaphoraRecord[] {
 
 // ---- short-turn detection ---------------------------------------------------
 
-describe("anaphora — short-turn detection (§4.1, recall-oriented)", () => {
+describe("anaphora — short-turn detection (recall-oriented)", () => {
   it("counts whitespace-split tokens", () => {
     expect(wordCount("")).toBe(0);
     expect(wordCount("   ")).toBe(0);
@@ -171,6 +171,18 @@ describe("anaphora — pending decision surfacing", () => {
     expect(answer?.decision_text).toBe("Pick one [A, B, C]");
   });
 
+  it("marks a multi-select question so a terse pick isn't misread", () => {
+    const records = anaphoraFor([
+      questionLine(T1, [
+        { question: "Which features?", options: ["Auth", "Billing"], multiSelect: true },
+      ]),
+      userLine(T2, "both"),
+    ]);
+    const answer = records.find((r) => r.human_text === "both");
+    expect(answer?.decision_kind).toBe("question");
+    expect(answer?.decision_text).toBe("Which features? [Auth, Billing] (multi-select)");
+  });
+
   it("scopes the pending window: a plan issued before the previous human turn is NOT pending", () => {
     const records = anaphoraFor([
       userLine(T1, "first request here"),
@@ -205,7 +217,7 @@ function parseRenderedBlocks(markdown: string): { timestamp: string; text: strin
   });
 }
 
-describe("anaphora — index alignment with rendered export (flaw 7)", () => {
+describe("anaphora — index alignment with rendered export", () => {
   it("every record.index maps to the correct rendered '### <ts>' heading + text", () => {
     const lines = [
       userLine(T0, "kick things off"),
@@ -264,12 +276,12 @@ describe("anaphora — index alignment with rendered export (flaw 7)", () => {
   });
 });
 
-// ---- v1 branching limitation (flaw 8) --------------------------------------
+// ---- v1 branching limitation -----------------------------------------------
 
 describe("anaphora — v1 branching limitation (documented)", () => {
   // v1 uses a linear file-order scan for antecedent/decision selection, which can
   // pick the wrong branch on forked/regenerated conversations. parentUuid walking
-  // is the planned v1.1 fix (PLAN §5.5, §8). Placeholder until then.
+  // is the planned v1.1 fix. Placeholder until then.
   it.todo(
     "v1.1: parentUuid-aware antecedent selection picks the correct branch on regenerated conversations",
   );

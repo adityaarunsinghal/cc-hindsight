@@ -1,5 +1,5 @@
 /**
- * core/render.ts — deterministic, byte-stable export rendering (PLAN §5.3).
+ * core/render.ts — deterministic, byte-stable export rendering.
  *
  * Turns a deduped corpus session into the per-session markdown artifact and
  * allocates its `<project>-<uuid8>.md` filename. Pure and deterministic: given
@@ -12,7 +12,7 @@ import type { CorpusSession } from "./dedupe.js";
 /**
  * Render one session to human-only markdown.
  *
- * Format (§5.3): an HTML comment header carrying the source path and message
+ * Format: an HTML comment header carrying the source path and message
  * count, then one `### <timestamp>` block per message with the message text
  * beneath it, chronological, blank-line separated. The output always ends with
  * a single trailing newline so files are POSIX-clean and re-run identical.

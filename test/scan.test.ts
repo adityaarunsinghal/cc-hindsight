@@ -4,7 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { runScan } from "../src/commands/scan.js";
 
-// N5: always drive scan with the synthetic fixture claude dir, never real ~/.claude.
+// Always drive scan with the synthetic fixture claude dir, never real ~/.claude.
 const CLAUDE_HOME = path.join(import.meta.dirname, "fixtures", "claude-home");
 const NO_PROJECTS_HOME = path.join(import.meta.dirname, "fixtures", "claude-home-noprojects");
 const PROJECTS = path.join(CLAUDE_HOME, "projects");

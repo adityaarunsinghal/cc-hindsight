@@ -74,7 +74,7 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
     const corpus = buildCorpus(forkPair());
     const b = corpus.sessions.find((s) => s.sessionId === "sess-b");
     // Even though B's survivors were the 3rd and 4th entries in the file, their
-    // post-dedupe indices are a dense 0,1 — this is what Task 5 aligns against.
+    // post-dedupe indices are a dense 0,1 — this is what the anaphora pass aligns against.
     expect(b?.messages.map((m) => m.index)).toEqual([0, 1]);
     const a = corpus.sessions.find((s) => s.sessionId === "sess-a");
     expect(a?.messages.map((m) => m.index)).toEqual([0, 1]);

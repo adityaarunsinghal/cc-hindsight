@@ -1,7 +1,7 @@
 import type { LibraryEntry } from "./library.js";
 
 /**
- * core/preferences.ts — deterministic preference aggregation (§5.8, F8).
+ * core/preferences.ts — deterministic preference aggregation.
  *
  * Collect `preferences[]` from every library entry's `sources.json`,
  * normalize, dedupe near-identical strings, rank by frequency × recency, and

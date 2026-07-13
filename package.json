@@ -1,6 +1,6 @@
 {
   "name": "cc-hindsight",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mine your Claude Code session history into a oneshot prompt library and CLAUDE.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,8 @@
     "cc-hindsight": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "npm-shrinkwrap.json"
   ],
   "engines": {
     "node": ">=22"
@@ -36,12 +37,13 @@
     "test": "vitest run",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && npm pack --dry-run --json > pack.json && node scripts/check-pack.mjs pack.json && rm pack.json"
   },
   "dependencies": {
-    "@clack/prompts": "^1.7.0",
-    "citty": "^0.2.2",
-    "zod": "^4.4.3"
+    "@clack/prompts": "1.7.0",
+    "citty": "0.2.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

@@ -78,8 +78,12 @@ export function decodeProjectDir(dirName: string): string {
  *
  * The result is sorted by `dirName` for a stable, deterministic ordering.
  */
-export function discoverProjects(claudeDir: string): ProjectInfo[] {
+export function discoverProjects(
+  claudeDir: string,
+  opts: { countEntries?: boolean } = {},
+): ProjectInfo[] {
   const projectsRoot = path.join(claudeDir, "projects");
+  const countEntriesOpt = opts.countEntries ?? true;
 
   let dirents: fs.Dirent[];
   try {
@@ -94,7 +98,7 @@ export function discoverProjects(claudeDir: string): ProjectInfo[] {
     if (!dirent.isDirectory()) continue;
     const dirName = dirent.name;
     const projectDir = path.join(projectsRoot, dirName);
-    const sessions = readSessions(projectDir);
+    const sessions = readSessions(projectDir, countEntriesOpt);
     const decodedPath = decodeProjectDir(dirName);
     // Short name = last path segment of the decoded path. `path.posix` because
     // decoded paths always use `/` separators regardless of host platform.
@@ -110,8 +114,16 @@ export function discoverProjects(claudeDir: string): ProjectInfo[] {
   return projects;
 }
 
-/** List top-level `*.jsonl` sessions in a project dir, newest first. */
-function readSessions(projectDir: string): SessionInfo[] {
+/**
+ * List top-level `*.jsonl` sessions in a project dir, newest first.
+ *
+ * `countEntries` controls whether each file is read to compute {@link
+ * SessionInfo.entryCount}: `scan` wants the number (its inventory column), but
+ * `export`/`status` never use it and would otherwise pay a full-file read here
+ * AND again when reading content — a wasteful double read on large trees.
+ * When disabled, `entryCount` is 0 and only cheap `stat` metadata is read.
+ */
+function readSessions(projectDir: string, countEntries: boolean): SessionInfo[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(projectDir, { withFileTypes: true });
@@ -128,10 +140,8 @@ function readSessions(projectDir: string): SessionInfo[] {
 
     const filePath = path.join(projectDir, entry.name);
     let stat: fs.Stats;
-    let content: string;
     try {
       stat = fs.statSync(filePath);
-      content = fs.readFileSync(filePath, "utf8");
     } catch {
       // Unreadable session file: skip it (do not abort the whole scan).
       continue;
@@ -140,7 +150,7 @@ function readSessions(projectDir: string): SessionInfo[] {
     sessions.push({
       file: entry.name,
       path: filePath,
-      entryCount: countEntries(content),
+      entryCount: countEntries ? countFileEntries(filePath) : 0,
       mtime: stat.mtime,
     });
   }
@@ -153,14 +163,44 @@ function readSessions(projectDir: string): SessionInfo[] {
   return sessions;
 }
 
-/** Count non-empty newline-delimited lines. Cheap: no per-line JSON parsing. */
-function countEntries(content: string): number {
-  if (content.length === 0) return 0;
-  let count = 0;
-  for (const line of content.split("\n")) {
-    if (line.trim().length > 0) count++;
+/**
+ * Count non-empty newline-delimited lines by reading the file in fixed-size
+ * chunks, so a single huge session never materializes as one giant string in
+ * memory. Semantics: a line is counted when it contains any non-whitespace
+ * character. Unreadable → 0.
+ */
+function countFileEntries(filePath: string): number {
+  const CHUNK = 64 * 1024;
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, "r");
+  } catch {
+    return 0;
   }
-  return count;
+  try {
+    const buffer = Buffer.allocUnsafe(CHUNK);
+    let count = 0;
+    let lineHasContent = false;
+    let bytesRead: number;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard readSync loop
+    while ((bytesRead = fs.readSync(fd, buffer, 0, CHUNK, null)) > 0) {
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = buffer[i];
+        if (byte === 0x0a) {
+          if (lineHasContent) count++; // end of a non-empty line
+          lineHasContent = false;
+        } else if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0d) {
+          lineHasContent = true; // a non-whitespace byte on this line
+        }
+      }
+    }
+    if (lineHasContent) count++; // final line without a trailing newline
+    return count;
+  } catch {
+    return 0;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**

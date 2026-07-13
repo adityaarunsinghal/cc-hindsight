@@ -1,10 +1,10 @@
 /**
- * core/anaphora.ts — recall-oriented anaphora pass (PLAN §4.1, §5.5, F3).
+ * core/anaphora.ts — the recall-oriented anaphora pass.
  *
  * For EVERY short human turn (≤ {@link SHORT_TURN_MAX_WORDS} whitespace tokens)
  * we attach the context needed to later resolve what "yes", "do both", or
  * "option 2" meant, WITHOUT classifying which turns are actually referential —
- * false positives are free, false negatives are the failure mode (§4.1). Two
+ * false positives are free, false negatives are the failure mode. Two
  * kinds of context are attached, either/both/neither may be present:
  *
  *   (a) antecedent — the ~{@link TAIL_CHARS}-char TAIL of the immediately
@@ -14,14 +14,14 @@
  *       `AskUserQuestion` question issued by the assistant AFTER the previous
  *       human turn and BEFORE this one; i.e. exactly what a bare "yes" approved.
  *
- * Index alignment is sacred (flaw 7): every record's `index` is the POST-DEDUPE
+ * Index alignment is sacred: every record's `index` is the POST-DEDUPE
  * message index from {@link buildCorpus} — the position of that message in the
  * rendered export. Human turns that were dropped as fork copies (owned by an
- * earlier session, R8) get NO record here; they are recorded where they are
- * owned. Attached assistant text is consumed ONLY to resolve meaning and is
- * never copied into a oneshot (§5.5).
+ * earlier session, rule R8) get NO record here; they are recorded where they
+ * are owned. Attached assistant text is consumed ONLY to resolve meaning and
+ * is never copied into a oneshot.
  *
- * KNOWN v1 LIMITATION (flaw 8): antecedent/decision selection is a linear
+ * KNOWN v1 LIMITATION: antecedent/decision selection is a linear
  * file-order scan. On forked or regenerated conversations (multiple assistant
  * branches interleaved by timestamp) it can pick the wrong branch. parentUuid
  * walking is the planned v1.1 fix; see the TODO-marked test in
@@ -31,7 +31,7 @@
 import type { CorpusSession } from "./dedupe.js";
 import { extractTimeline, type TimelineEvent } from "./extract.js";
 
-/** Human turns with at most this many whitespace tokens get a record (§4.1). */
+/** Human turns with at most this many whitespace tokens get a record. */
 export const SHORT_TURN_MAX_WORDS = 15;
 
 /** Antecedent / assistant-tail bound; the tail is kept, the head is dropped. */
@@ -55,7 +55,7 @@ export interface AnaphoraRecord {
   decision_text: string | null;
 }
 
-/** Whitespace-split token count (word = whitespace-delimited run, §4.1). */
+/** Whitespace-split token count (word = whitespace-delimited run). */
 export function wordCount(text: string): number {
   const trimmed = text.trim();
   return trimmed === "" ? 0 : trimmed.split(/\s+/).length;

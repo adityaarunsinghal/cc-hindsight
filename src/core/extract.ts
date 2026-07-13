@@ -1,14 +1,14 @@
 /**
- * core/extract.ts — the audited extractor (PLAN §5.4, the fidelity contract).
+ * core/extract.ts — the audited extractor: the fidelity contract.
  *
  * Pure module: input is the raw JSONL lines of ONE Claude Code session file;
  * output is the human-authored messages plus an observable record of every
- * dropped piece (flaw 6 disposition, §4.2 — false drops must be visible under
- * `--verbose`). No filesystem access, so it is trivially unit-testable.
+ * dropped piece — false drops must be visible under `--verbose`, never
+ * silent. No filesystem access, so it is trivially unit-testable.
  *
  * Implements extraction rules R1–R7, R10, R11. Each rule below is commented
  * with the transcript shape it handles and is pinned by a dedicated fixture
- * under test/fixtures/extract/. Parsing is tolerant (§5.9): unknown fields are
+ * under test/fixtures/extract/. Parsing is tolerant: unknown fields are
  * ignored, admission/rejection is allow-list based, and corrupt lines are
  * skipped and counted rather than aborting the whole session.
  */
@@ -37,7 +37,7 @@ export interface Drop {
 export interface ExtractResult {
   messages: ExtractedMessage[];
   drops: Drop[];
-  /** Count of corrupt/unparseable JSONL lines skipped (never aborts, §5.9). */
+  /** Count of corrupt/unparseable JSONL lines skipped (never aborts). */
   badLines: number;
 }
 
@@ -254,7 +254,7 @@ function collectUserContent(
       // Non-rejection tool_result is machine output: ignored (not a Drop — it
       // was never a candidate human piece).
     }
-    // Unknown block types are ignored (tolerant parsing, §5.9).
+    // Unknown block types are ignored (tolerant parsing).
   }
 }
 
@@ -339,7 +339,7 @@ export function extractMessages(lines: string[]): ExtractResult {
  *
  * Extracted so {@link extractMessages} and {@link extractTimeline} produce
  * byte-identical human-message text — the dedupe key and the anaphora↔export
- * index alignment (§5.5, flaw 7) both depend on the two paths agreeing exactly.
+ * index alignment both depend on the two paths agreeing exactly.
  */
 function humanEntryText(
   entry: Record<string, unknown>,
@@ -357,7 +357,7 @@ function humanEntryText(
 }
 
 /**
- * A single event on a session file's linear timeline (PLAN §5.5). Beyond the
+ * A single event on a session file's linear timeline. Beyond the
  * human turns {@link extractMessages} surfaces, the anaphora pass needs the
  * assistant's side of the conversation to resolve what short human turns like
  * "yes" or "option 2" actually referred to:
@@ -406,7 +406,13 @@ function renderQuestion(input: unknown): string {
         }
       }
     }
-    lines.push(labels.length > 0 ? `${question} [${labels.join(", ")}]` : question);
+    // A multi-select question can be answered with several options at once; note
+    // it so the author stage doesn't misread a terse "option 2" against what was
+    // actually a pick-many surface.
+    const multi = q.multiSelect === true ? " (multi-select)" : "";
+    lines.push(
+      labels.length > 0 ? `${question} [${labels.join(", ")}]${multi}` : `${question}${multi}`,
+    );
   }
   return lines.join("\n");
 }
@@ -421,7 +427,7 @@ function renderQuestion(input: unknown): string {
  * then emits the `plan` / `question` event. Assumed tool_use shapes:
  *   { type:'tool_use', name:'ExitPlanMode',    input:{ plan: string } }
  *   { type:'tool_use', name:'AskUserQuestion', input:{ questions:[…] } }
- * Unknown tool_use names are ignored (tolerant parsing, §5.9).
+ * Unknown tool_use names are ignored (tolerant parsing).
  */
 function assistantEvents(entry: Record<string, unknown>, ts: string): TimelineEvent[] {
   const message = entry.message;
@@ -465,13 +471,13 @@ function assistantEvents(entry: Record<string, unknown>, ts: string): TimelineEv
 
 /**
  * Build a session file's linear timeline of human turns, assistant text turns,
- * and pending plan/question surfaces (PLAN §5.5, consumed by core/anaphora.ts
- * and core/outcome.ts). Same tolerant parsing as {@link extractMessages}:
+ * and pending plan/question surfaces (consumed by core/anaphora.ts and
+ * core/outcome.ts). Same tolerant parsing as {@link extractMessages}:
  * blank/corrupt lines are skipped, unknown fields ignored.
  *
  * R2 rejection is applied to EVERY entry — not just `user`/`attachment` — so a
  * subagent/sidechain (`isSidechain`), meta, or sdk-automation assistant turn can
- * NEVER become an antecedent (flaw 8 / R2 kept single-sourced). Human-turn text
+ * NEVER become an antecedent (R2 stays single-sourced). Human-turn text
  * is produced by the SAME {@link humanEntryText} the exporter uses, so timeline
  * human turns align 1:1 (by timestamp+text) with the deduped, exported corpus.
  */

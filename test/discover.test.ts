@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { decodeProjectDir, discoverProjects, type ProjectInfo } from "../src/core/discover.js";
 
-// N5: tests NEVER read the real `~/.claude`. Everything below points at the
+// Tests NEVER read the real `~/.claude`. Everything below points at the
 // synthetic fixture tree committed under test/fixtures/claude-home.
 const CLAUDE_HOME = path.join(import.meta.dirname, "fixtures", "claude-home");
 const NO_PROJECTS_HOME = path.join(import.meta.dirname, "fixtures", "claude-home-noprojects");
@@ -116,5 +117,28 @@ describe("discoverProjects", () => {
     expect(webapp.latestMtime?.toISOString()).toBe(new Date("2026-07-11T09:30:00Z").toISOString());
     // Sessions are sorted newest-first.
     expect(webapp.sessions[0]?.file).toBe("s2.jsonl");
+  });
+
+  it("skips entry counting when countEntries:false (avoids the double read)", () => {
+    const projects = discoverProjects(CLAUDE_HOME, { countEntries: false });
+    // Sessions are still discovered; only the count is elided.
+    const webapp = byDir(projects, "-Users-alice-projects-webapp");
+    expect(webapp.sessions.map((s) => s.file).sort()).toEqual(["s1.jsonl", "s2.jsonl"]);
+    expect(webapp.entryTotal).toBe(0);
+    expect(webapp.sessions.every((s) => s.entryCount === 0)).toBe(true);
+  });
+
+  it("chunk-counts entries exactly, incl. no trailing newline and blank lines", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cch-count-"));
+    try {
+      const projDir = path.join(home, "projects", "-tmp-p");
+      fs.mkdirSync(projDir, { recursive: true });
+      // 3 non-empty lines, a blank line, and NO trailing newline on the last.
+      fs.writeFileSync(path.join(projDir, "s.jsonl"), '{"a":1}\n{"b":2}\n\n{"c":3}');
+      const proj = discoverProjects(home).find((p) => p.dirName === "-tmp-p");
+      expect(proj?.sessions[0]?.entryCount).toBe(3);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

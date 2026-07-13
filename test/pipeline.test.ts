@@ -3,12 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  buildDigestPrompt,
-  capContent,
-  DIGEST_CONTENT_CAP,
-  DIGEST_PROMPT_VERSION,
-} from "../src/claude/prompts/digest.js";
+import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
 import type { Digest } from "../src/claude/schemas.js";
 import type { ManifestEntry } from "../src/commands/distill.js";
@@ -70,28 +65,7 @@ const DIGEST: Digest = {
   outcome: "completed",
 };
 
-// --- capContent / prompt builder --------------------------------------------
-
-describe("capContent", () => {
-  it("passes short content through untouched", () => {
-    expect(capContent("hello", 100)).toBe("hello");
-  });
-
-  it("caps monsters to exactly the cap with head+tail and a truncation note", () => {
-    const content = `HEAD${"x".repeat(10_000)}TAIL`;
-    const capped = capContent(content, 1_000);
-    expect(capped.length).toBe(1_000);
-    expect(capped.startsWith("HEAD")).toBe(true);
-    expect(capped.endsWith("TAIL")).toBe(true);
-    expect(capped).toContain("truncated");
-    expect(capped).toContain("characters from the middle");
-  });
-
-  it("defaults to the 50k cap", () => {
-    const capped = capContent("y".repeat(DIGEST_CONTENT_CAP + 5_000));
-    expect(capped.length).toBe(DIGEST_CONTENT_CAP);
-  });
-});
+// --- prompt builder ----------------------------------------------------------
 
 describe("buildDigestPrompt", () => {
   it("labels outcome evidence and marks the assistant tail machine-authored", () => {
@@ -180,6 +154,59 @@ describe("runDigestStage", () => {
     expect(Object.keys(cp?.digests ?? {}).sort()).toEqual(["a.md", "b.md"]);
   });
 
+  it("bounds in-flight calls to --concurrency and checkpoints everything", async () => {
+    const home = tmpHome();
+    const names = ["a.md", "b.md", "c.md", "d.md", "e.md"];
+    for (const n of names) writeExport(home, n);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const runner: RunnerFn = (async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      inFlight--;
+      return DIGEST;
+    }) as RunnerFn;
+
+    const result = await runDigestStage({
+      home,
+      entries: names.map((n) => entry(n)),
+      runner,
+      output: sink(),
+      concurrency: 2,
+    });
+
+    expect(result.completed).toBe(5);
+    expect(result.failed).toEqual([]);
+    expect(maxInFlight).toBe(2); // pool actually parallelizes, and never exceeds the bound
+    expect(Object.keys(loadDigests(home)?.digests ?? {}).sort()).toEqual(names);
+  });
+
+  it("stage default stays sequential (concurrency omitted → 1 in flight)", async () => {
+    const home = tmpHome();
+    for (const n of ["a.md", "b.md", "c.md"]) writeExport(home, n);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const runner: RunnerFn = (async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return DIGEST;
+    }) as RunnerFn;
+
+    await runDigestStage({
+      home,
+      entries: [entry("a.md"), entry("b.md"), entry("c.md")],
+      runner,
+      output: sink(),
+    });
+
+    expect(maxInFlight).toBe(1);
+  });
+
   it("resumes: checkpointed sessions are skipped and never re-run", async () => {
     const home = tmpHome();
     writeExport(home, "a.md");
@@ -266,6 +293,86 @@ describe("runDigestStage", () => {
     await runDigestStage({ home, entries: [entry("a.md")], runner, output: sink() });
     expect(prompt).toContain("Shipped v2.");
     expect(prompt).toContain('"looks great"');
+  });
+
+  it("warns when the digests checkpoint was written by a different prompt version", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    saveDigests(home, {
+      generation: "g1",
+      prompt_version: DIGEST_PROMPT_VERSION + 99,
+      digests: { "a.md": DIGEST },
+    });
+    const chunks: string[] = [];
+    const out = new Writable({
+      write(c, _e, cb) {
+        chunks.push(c.toString());
+        cb();
+      },
+    });
+    const runner: RunnerFn = (async () => DIGEST) as RunnerFn;
+    await runDigestStage({ home, entries: [entry("a.md")], runner, output: out });
+    expect(chunks.join("")).toContain("produced by prompt v");
+  });
+
+  it("blocks an over-budget session under --truncate=never without a runner call", async () => {
+    const home = tmpHome();
+    writeExport(home, "big.md", "z".repeat(5_000));
+    let called = false;
+    const runner: RunnerFn = (async () => {
+      called = true;
+      return DIGEST;
+    }) as RunnerFn;
+
+    const chunks: string[] = [];
+    const out = new Writable({
+      write(c, _e, cb) {
+        chunks.push(c.toString());
+        cb();
+      },
+    });
+
+    const result = await runDigestStage({
+      home,
+      entries: [entry("big.md")],
+      runner,
+      output: out,
+      budget: 1_000,
+      truncate: "never",
+    });
+
+    expect(called).toBe(false); // pre-spend block
+    expect(result.completed).toBe(0);
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0]?.export).toBe("big.md");
+    expect(chunks.join("")).toContain("blocked");
+    // Nothing was checkpointed for the blocked session.
+    expect(loadDigests(home)?.digests["big.md"]).toBeUndefined();
+  });
+
+  it("cuts an over-budget session under --truncate=extreme and digests it", async () => {
+    const home = tmpHome();
+    writeExport(home, "big.md", "z".repeat(5_000));
+    let promptLen = 0;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      promptLen = opts.prompt.length;
+      return DIGEST;
+    }) as RunnerFn;
+
+    const result = await runDigestStage({
+      home,
+      entries: [entry("big.md")],
+      runner,
+      output: sink(),
+      budget: 1_000,
+      truncate: "extreme",
+    });
+
+    expect(result.completed).toBe(1);
+    expect(result.blocked).toHaveLength(0);
+    // The prompt carried the cut content (plus fixed prompt scaffolding).
+    expect(promptLen).toBeLessThan(5_000);
+    expect(loadDigests(home)?.digests["big.md"]).toBeDefined();
   });
 
   it("records unreadable exports as failures without invoking the runner", async () => {

@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 
 /**
- * ui/clipboard.ts — the ~10-line clipboard helper (N2): pick the platform's
+ * ui/clipboard.ts — the ~10-line clipboard helper: pick the platform's
  * clipboard tool, pipe text to it. All process interaction is injectable so
  * tests never touch a real clipboard.
  */

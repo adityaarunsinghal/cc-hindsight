@@ -3,14 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  AUTHOR_MEMBER_CAP,
-  AUTHOR_PROMPT_VERSION,
-  buildAuthorPrompt,
-} from "../src/claude/prompts/author.js";
+import { AUTHOR_PROMPT_VERSION, buildAuthorPrompt } from "../src/claude/prompts/author.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
 import type { Author, ClusterTask, Digest } from "../src/claude/schemas.js";
 import type { ManifestEntry } from "../src/commands/distill.js";
+import { oneshotHash } from "../src/core/library.js";
 import {
   type RunnerFn,
   runAuthorStage,
@@ -92,7 +89,7 @@ const PROMPT = buildAuthorPrompt({
   ],
 });
 
-// --- prompt-contract tests (§5.10) — pin the realism instructions -----------
+// --- prompt-contract tests — pin the realism instructions -----------
 
 describe("author prompt contract", () => {
   it("pins the knowable-at-t=0 test", () => {
@@ -157,15 +154,18 @@ describe("author prompt contract", () => {
     expect(PROMPT).toContain("MACHINE-AUTHORED");
   });
 
-  it("has a version constant and a member cap", () => {
+  it("has a version constant and inlines member content verbatim (budget is the pipeline's job)", () => {
     expect(AUTHOR_PROMPT_VERSION).toBeGreaterThanOrEqual(1);
-    expect(AUTHOR_MEMBER_CAP).toBeGreaterThan(0);
-    // Monster member content is capped:
+    // The pipeline's budget system blocks or cuts oversized tasks BEFORE they
+    // reach the builder, so the builder itself must inline content whole —
+    // nothing is ever lost here without disclosure upstream.
+    const content = "z".repeat(40_000);
     const big = buildAuthorPrompt({
       task: task("big-task-here", ["m.md"]),
-      members: [{ exportName: "m.md", content: "z".repeat(AUTHOR_MEMBER_CAP + 10_000) }],
+      members: [{ exportName: "m.md", content }],
     });
-    expect(big).toContain("truncated");
+    expect(big).toContain(content);
+    expect(big).not.toContain("truncated");
   });
 });
 
@@ -242,6 +242,80 @@ describe("runAuthorStage", () => {
     expect(Date.parse(sources.authored_at)).not.toBeNaN();
   });
 
+  it("records oneshot_hash of the exact written bytes", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    const runner: RunnerFn = (async () => AUTHORED) as RunnerFn;
+
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+    });
+
+    const dir = path.join(home, "library", "auth-feature-work");
+    const oneshot = fs.readFileSync(path.join(dir, "auth-feature-work.oneshot.md"), "utf8");
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(dir, "sources.json"), "utf8"),
+    ) as SourcesJson;
+    expect(sources.oneshot_hash).toBe(oneshotHash(oneshot));
+  });
+
+  it("keeps a hand-edited oneshot on re-author (no claude call) unless --force", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    writeExport(home, "b.md");
+    let calls = 0;
+    const runner: RunnerFn = (async () => {
+      calls++;
+      return AUTHORED;
+    }) as RunnerFn;
+
+    // Author once with member a.md only.
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+    });
+    expect(calls).toBe(1);
+
+    // User hand-tunes the oneshot.
+    const oneshotPath = path.join(
+      home,
+      "library",
+      "auth-feature-work",
+      "auth-feature-work.oneshot.md",
+    );
+    fs.appendFileSync(oneshotPath, "\nMy own hard-won addition.\n");
+    const editedContent = fs.readFileSync(oneshotPath, "utf8");
+
+    // Membership changed → would normally re-author. Edit protection wins.
+    const r2 = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md", "b.md"])],
+      digests: { "a.md": digest("completed"), "b.md": digest("completed") },
+      runner,
+    });
+    expect(calls).toBe(1); // no new claude call — protected pre-spend
+    expect(r2.skipped).toHaveLength(1);
+    expect(r2.skipped[0]?.reason).toContain("--force");
+    expect(fs.readFileSync(oneshotPath, "utf8")).toBe(editedContent); // untouched
+
+    // --force re-authors and overwrites.
+    const r3 = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md", "b.md"])],
+      digests: { "a.md": digest("completed"), "b.md": digest("completed") },
+      runner,
+      force: true,
+    });
+    expect(calls).toBe(2);
+    expect(r3.authored).toEqual(["auth-feature-work"]);
+    expect(fs.readFileSync(oneshotPath, "utf8")).not.toBe(editedContent);
+  });
+
   it("skips tasks with no completed/partial member and never calls the runner", async () => {
     const home = tmpHome();
     writeExport(home, "a.md");
@@ -273,7 +347,7 @@ describe("runAuthorStage", () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, "sources.json"),
-      JSON.stringify({ slug: "auth-feature-work", generation: "g1" }),
+      JSON.stringify({ slug: "auth-feature-work", generation: "g1", members: ["a.md"] }),
     );
 
     let calls = 0;
@@ -327,6 +401,162 @@ describe("runAuthorStage", () => {
     expect(fs.existsSync(path.join(home, "library", "auth-feature-work", "sources.json"))).toBe(
       true,
     );
+  });
+
+  it("re-authors a same-generation task whose membership changed", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    writeExport(home, "b.md");
+    const dir = path.join(home, "library", "auth-feature-work");
+    fs.mkdirSync(dir, { recursive: true });
+    // Previously authored in g1 with members [a.md].
+    fs.writeFileSync(
+      path.join(dir, "sources.json"),
+      JSON.stringify({ slug: "auth-feature-work", generation: "g1", members: ["a.md"] }),
+    );
+
+    let calls = 0;
+    const runner: RunnerFn = (async () => {
+      calls++;
+      return AUTHORED;
+    }) as RunnerFn;
+
+    // Same generation g1 but membership grew to [a.md, b.md] (incremental
+    // re-cluster). Must re-author, not resume stale content.
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md", "b.md"])],
+      digests: { "a.md": digest("completed"), "b.md": digest("partial") },
+      generation: "g1",
+      runner,
+    });
+
+    expect(calls).toBe(1);
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    const sources = JSON.parse(fs.readFileSync(path.join(dir, "sources.json"), "utf8"));
+    expect(sources.members).toEqual(["a.md", "b.md"]);
+
+    // Re-running with the SAME membership now resumes (no further call).
+    const result2 = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md", "b.md"])],
+      digests: { "a.md": digest("completed"), "b.md": digest("partial") },
+      generation: "g1",
+      runner,
+    });
+    expect(calls).toBe(1);
+    expect(result2.resumed).toEqual(["auth-feature-work"]);
+  });
+
+  it("fails a task whose member export is unreadable instead of authoring a placeholder", async () => {
+    const home = tmpHome();
+    // Deliberately do NOT write the export for a.md → unreadable member.
+    let called = false;
+    const runner: RunnerFn = (async () => {
+      called = true;
+      return AUTHORED;
+    }) as RunnerFn;
+
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+    });
+
+    expect(called).toBe(false);
+    expect(result.authored).toEqual([]);
+    expect(result.failed[0]?.export).toBe("auth-feature-work");
+    expect(result.failed[0]?.error).toContain("unreadable");
+    expect(fs.existsSync(path.join(home, "library", "auth-feature-work"))).toBe(false);
+  });
+
+  it("blocks an over-budget task under --truncate=never without a runner call", async () => {
+    const home = tmpHome();
+    fs.writeFileSync(path.join(home, "exports", "a.md"), "z".repeat(5_000));
+    let called = false;
+    const runner: RunnerFn = (async () => {
+      called = true;
+      return AUTHORED;
+    }) as RunnerFn;
+
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+      budget: 1_000,
+      truncate: "never",
+    });
+
+    expect(called).toBe(false);
+    expect(result.authored).toEqual([]);
+    expect(result.failed[0]?.export).toBe("auth-feature-work");
+    expect(result.failed[0]?.error).toContain("exceeds the input budget");
+    expect(fs.existsSync(path.join(home, "library", "auth-feature-work"))).toBe(false);
+  });
+
+  it("cuts an over-budget task under --truncate=extreme and authors it", async () => {
+    const home = tmpHome();
+    fs.writeFileSync(path.join(home, "exports", "a.md"), "z".repeat(5_000));
+    let promptLen = Number.POSITIVE_INFINITY;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      promptLen = opts.prompt.length;
+      return AUTHORED;
+    }) as RunnerFn;
+
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+      budget: 1_000,
+      truncate: "extreme",
+    });
+
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    expect(promptLen).toBeLessThan(5_000);
+  });
+
+  it("records input_coverage and truncations in sources.json under --truncate=extreme", async () => {
+    const home = tmpHome();
+    fs.writeFileSync(path.join(home, "exports", "a.md"), "z".repeat(5_000));
+    const runner: RunnerFn = (async () => AUTHORED) as RunnerFn;
+
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+      budget: 1_000,
+      truncate: "extreme",
+    });
+
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+    );
+    expect(sources.input_coverage).toBeLessThan(1);
+    expect(sources.input_coverage).toBeGreaterThan(0);
+    expect(sources.truncations.length).toBeGreaterThan(0);
+    expect(sources.truncations[0].export).toBe("a.md");
+    expect(sources.truncations[0].dropped_chars).toBeGreaterThan(0);
+  });
+
+  it("records full coverage (input_coverage 1, no truncations) when nothing is cut", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    const runner: RunnerFn = (async () => AUTHORED) as RunnerFn;
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+    });
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+    );
+    expect(sources.input_coverage).toBe(1);
+    expect(sources.truncations).toEqual([]);
   });
 
   it("uses the task slug for paths even when the response slug differs", async () => {

@@ -26,3 +26,21 @@ export function resolvePaths(args: { home?: string; "claude-dir"?: string }): Re
     args["claude-dir"] ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
   return { home, claudeDir };
 }
+
+/**
+ * Parse a non-negative integer CLI flag, clamping deterministically: a missing
+ * or unparseable value yields `fallback`; a parsed value below `min` clamps up
+ * to `min`. Shared by `export --min-messages` and `distill --min-substance` so
+ * the two commands can never diverge. The naive `parseInt(...) || fallback`
+ * has two traps this avoids: it maps a legitimate "0" to the fallback, and it
+ * lets "-1" through as "everything is eligible".
+ */
+export function parseClampedInt(
+  raw: string | undefined,
+  opts: { fallback: number; min: number },
+): number {
+  if (raw === undefined) return opts.fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return opts.fallback;
+  return parsed < opts.min ? opts.min : parsed;
+}

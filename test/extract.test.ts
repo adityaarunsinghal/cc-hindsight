@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { extractMessages } from "../src/core/extract.js";
 
-/** Load a synthetic fixture as raw JSONL lines (never the real ~/.claude, N5). */
+/** Load a synthetic fixture as raw JSONL lines (never the real ~/.claude). */
 function load(name: string): string[] {
   const url = new URL(`./fixtures/extract/${name}`, import.meta.url);
   return readFileSync(url, "utf8").split(/\r?\n/);

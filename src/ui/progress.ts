@@ -4,7 +4,7 @@ import { spinner } from "@clack/prompts";
 /**
  * ui/progress.ts — a live elapsed-time spinner around each claude call.
  *
- * A distill call runs ~30–60s and used to render as pure silence, which reads
+ * A distill call runs ~30–60s; with no feedback that long a silence reads
  * as a hang. On an interactive terminal, `withSpinner` shows a clack spinner
  * with a timer while `fn` is in flight and *clears it completely* afterwards —
  * the permanent, test-pinned log lines around it stay byte-identical in every

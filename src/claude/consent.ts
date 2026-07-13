@@ -3,7 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { bold, cyan, dim, yellow } from "../ui/style.js";
 
 /**
- * The consent & cost gate (§5.7).
+ * The consent & cost gate.
  *
  * Before distill invokes the local `claude` CLI it discloses the exact
  * invocation count and asks for confirmation. Nothing runs implicitly:
@@ -22,6 +22,12 @@ export interface DistillPlan {
   authorEstimate: number;
   /** Optional resume line shown when checkpoints already exist. */
   resumeNote?: string;
+  /** Input budget in chars — when set, a coverage disclosure line is shown. */
+  budget?: number;
+  /** Overflow policy in effect. */
+  truncate?: "never" | "extreme";
+  /** Eligible sessions whose content exceeds the budget (consent-time estimate). */
+  oversized?: { export: string; chars: number }[];
 }
 
 export interface ConsentOptions {
@@ -41,11 +47,11 @@ export type ConsentResult = "proceed" | "declined" | "dry-run";
 export const PROCEED_PROMPT = "  Proceed? [y/N] ";
 
 /**
- * Render the disclosure block exactly as specified in §5.7: a two-space-indented
- * header, a bulleted breakdown with right-aligned counts (the author line
- * carries a `~` prefix), and the `≈ total` summary. The trailing `Proceed?`
- * prompt is intentionally *not* part of this block — dry-run prints the block
- * but must not prompt.
+ * Render the disclosure block: a two-space-indented header, a bulleted
+ * breakdown with right-aligned counts (the author line carries a `~` prefix),
+ * and the `≈ total` summary. The exact copy is byte-pinned by tests — it is a
+ * contract, not decoration. The trailing `Proceed?` prompt is intentionally
+ * *not* part of this block — dry-run prints the block but must not prompt.
  */
 export function renderPlan(plan: DistillPlan): string {
   const digestStr = String(plan.digests);
@@ -63,6 +69,21 @@ export function renderPlan(plan: DistillPlan): string {
     `    ${dim("•")} ${count(authorStr)} oneshot authoring calls (one per task; exact count known after clustering)`,
     `  ≈ ${bold(cyan(String(total)))} invocations total.${dim(" Nothing is sent anywhere except through your own claude CLI.")}`,
   ];
+  // Coverage disclosure: only shown when a budget context is supplied.
+  // never-mode overflow is refused BEFORE consent (pre-spend), so the only case
+  // reaching here with oversized sessions is extreme mode, which cuts + reports.
+  if (plan.budget !== undefined) {
+    const oversized = plan.oversized ?? [];
+    if (oversized.length > 0 && plan.truncate === "extreme") {
+      lines.push(
+        `  ${yellow(`⚠ ${oversized.length} session(s) exceed the ${plan.budget}-char budget and will be cut middle-out (reported).`)}`,
+      );
+    } else if (oversized.length === 0) {
+      lines.push(
+        `  ${dim(`Every exported byte will reach the model (budget ${plan.budget} chars).`)}`,
+      );
+    }
+  }
   if (plan.resumeNote) {
     lines.push(`  ${yellow(plan.resumeNote)}`);
   }
@@ -72,16 +93,26 @@ export function renderPlan(plan: DistillPlan): string {
 function ask(question: string, input: Readable, output: Writable): Promise<string> {
   const rl = readline.createInterface({ input, output });
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
+    let answered = false;
+    const done = (answer: string) => {
+      if (answered) return;
+      answered = true;
       rl.close();
       resolve(answer);
-    });
+    };
+    rl.question(question, done);
+    // EOF (piped `< /dev/null`, CI, Ctrl-D) closes the stream WITHOUT firing the
+    // question callback. Without this, the promise would never resolve — the
+    // process hangs or falls off the event loop and exits 0 having done nothing,
+    // violating the "declining is exit 2, never a partial run" contract. Treat
+    // EOF as empty input, which the callers map to declined (default No).
+    rl.on("close", () => done(""));
   });
 }
 
 /**
  * Generic `[y/N]` confirmation on injected streams (default No). Used for
- * secondary gates like `distill --fresh` (§5.7: checkpoints are cleared only
+ * secondary gates like `distill --fresh` (checkpoints are cleared only
  * after an explicit confirmation).
  */
 export async function askYesNo(

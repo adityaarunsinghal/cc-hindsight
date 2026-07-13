@@ -1,17 +1,17 @@
 {
   "name": "cc-hindsight",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "cc-hindsight",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "license": "MIT",
       "dependencies": {
-        "@clack/prompts": "^1.7.0",
-        "citty": "^0.2.2",
-        "zod": "^4.4.3"
+        "@clack/prompts": "1.7.0",
+        "citty": "0.2.2",
+        "zod": "4.4.3"
       },
       "bin": {
         "cc-hindsight": "dist/cli.js"

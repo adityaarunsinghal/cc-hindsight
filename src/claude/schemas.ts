@@ -51,7 +51,7 @@ export const AuthorSchema = z.object({
 export type Author = z.infer<typeof AuthorSchema>;
 export type Preference = Author["preferences"][number];
 
-/** `preferences --consolidate`: one call to merge semantic duplicates (§5.8). */
+/** `preferences --consolidate`: one call to merge semantic duplicates. */
 export const ConsolidateSchema = z.object({
   preferences: z.array(
     z.object({

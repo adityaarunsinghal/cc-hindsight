@@ -6,7 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { type ExportArgs, type ManifestEntry, runExport } from "../src/commands/export.js";
 
-// N5: drive export with the synthetic fixture claude dir, never the real one;
+// Drive export with the synthetic fixture claude dir, never the real one;
 // every home directory is a fresh mkdtemp, never a real ~/.cc-hindsight.
 const CLAUDE_HOME = path.join(import.meta.dirname, "fixtures", "export-home");
 const ALPHA_DIR = path.join(CLAUDE_HOME, "projects", "-Users-dev-alpha");
@@ -152,6 +152,41 @@ describe("export — idempotency", () => {
   });
 });
 
+describe("export — hygiene & permissions", () => {
+  it("prunes a stale export whose session vanished, on an unfiltered run", () => {
+    const home = freshHome();
+    const { sink } = makeSink();
+    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink });
+    const stale = path.join(home, "exports", "ghost-deadbeef.md");
+    fs.writeFileSync(stale, "# stale");
+
+    const { sink: sink2 } = makeSink();
+    const stats = runExport({ home, "claude-dir": CLAUDE_HOME, output: sink2 });
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(stats.prunedExports).toBe(1);
+  });
+
+  it("does NOT prune under a --project filter (subset run)", () => {
+    const home = freshHome();
+    const { sink } = makeSink();
+    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink });
+    const other = path.join(home, "exports", "other-project.md");
+    fs.writeFileSync(other, "# from another scope");
+
+    const { sink: sink2 } = makeSink();
+    const stats = runExport({ home, "claude-dir": CLAUDE_HOME, project: "alpha", output: sink2 });
+    expect(fs.existsSync(other)).toBe(true);
+    expect(stats.prunedExports).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("writes owner-only exports (0600) in a 0700 dir", () => {
+    const { home } = run();
+    expect(fs.statSync(path.join(home, "exports")).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(home, "exports", "alpha-a1111111.md")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(home, "exports", "manifest.json")).mode & 0o777).toBe(0o600);
+  });
+});
+
 describe("export — filters", () => {
   it("--min-messages 2 excludes the single-message session", () => {
     const { home, stats } = run({ "min-messages": "2" });
@@ -212,6 +247,7 @@ describe("export — verbose observability", () => {
         "exportsDir",
         "files",
         "outcomeSessions",
+        "prunedExports",
         "readErrors",
         "shortTurns",
         "shortTurnsWithDecision",
@@ -223,7 +259,7 @@ describe("export — verbose observability", () => {
   });
 });
 
-// ---- Task 5: anaphora.json + outcomes.json integration (anaphora-home) ------
+// ---- anaphora.json + outcomes.json integration (anaphora-home) ------
 
 const ANAPHORA_HOME = path.join(import.meta.dirname, "fixtures", "anaphora-home");
 
@@ -261,7 +297,7 @@ function parseBlocks(markdown: string): { timestamp: string; text: string }[] {
     });
 }
 
-describe("export — anaphora + outcome artifacts (Task 5)", () => {
+describe("export — anaphora + outcome artifacts", () => {
   it("writes anaphora.json and outcomes.json with the expected counts", () => {
     const { home, stats } = runAnaphora();
     expect(stats.exportedSessions).toBe(2);
@@ -363,7 +399,7 @@ describe("export — anaphora + outcome artifacts (Task 5)", () => {
     }
   });
 
-  it("prints the Task 5 summary line and per-session attachments under --verbose", () => {
+  it("prints the attachment summary line and per-session attachments under --verbose", () => {
     const { out } = runAnaphora({ verbose: true });
     expect(out).toContain(
       "8 short turns attached (2 had a pending plan/question); outcome evidence captured for 2 sessions",

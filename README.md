@@ -16,8 +16,6 @@ tomorrow morning:
    ("diagnose before acting", "pin the versions", "be terse"), surfaced as a
    paste-ready `CLAUDE.md` block so every future session starts aligned.
 
-![demo](docs/demo.gif) <!-- TODO: record demo GIF -->
-
 ## The t=0 problem
 
 You get better results the more context you front-load into your first prompt —
@@ -53,17 +51,21 @@ npx cc-hindsight export     # 2. export — human-only markdown per session
 npx cc-hindsight distill    # 3. distill — digest → cluster → author (asks first)
 ```
 
-Then browse the results:
+Then browse — and curate — the results:
 
 ```bash
-npx cc-hindsight list                # your library
+npx cc-hindsight list                # your library (✎ edited / ▲▼ rating badges)
 npx cc-hindsight show <slug>         # read a oneshot
 npx cc-hindsight copy <slug>         # → clipboard, paste into a fresh session
+npx cc-hindsight edit <slug>         # open in $EDITOR — your edits are protected
+npx cc-hindsight rate <slug> up      # record a verdict (up|down)
+npx cc-hindsight prune               # remove orphaned entries (asks first)
 npx cc-hindsight preferences         # → CLAUDE.md block
 npx cc-hindsight status              # pipeline funnel + orphan/skip flags
 ```
 
-Requires Node ≥ 22. `scan` and `export` are fully deterministic — no LLM, no
+Requires Node ≥ 22 on macOS or Linux (Windows is untested and currently
+unsupported). `scan` and `export` are fully deterministic — no LLM, no
 network. `distill` uses the `claude` CLI you already have, and never without
 asking.
 
@@ -78,8 +80,10 @@ product:
 - **Three runtime dependencies.** [`citty`](https://github.com/unjs/citty)
   (zero-dependency CLI framework), [`zod`](https://zod.dev) (schema
   validation), and [`@clack/prompts`](https://github.com/bombshell-dev/clack)
-  (progress spinners — two micro-packages under the hood). The whole data
-  path is small enough to audit in one sitting.
+  (progress spinners — five micro-packages under the hood). All three are
+  exact-pinned, and the entire transitive tree ships locked via
+  `npm-shrinkwrap.json`. The whole data path is small enough to audit in one
+  sitting.
 - **Consent-gated LLM use.** `distill` states the exact invocation count and
   waits for `[y/N]` before anything runs on your subscription/credits.
   `--dry-run` shows the full plan for free. Declining is exit code 2, never a
@@ -153,7 +157,11 @@ Whatever your `claude` CLI costs you: it runs on your existing subscription or
 API credits. The consent prompt states the exact invocation count up front
 (one call per session digested, one to cluster, one per task authored), and
 `--dry-run` prints the same plan without running anything. Checkpoints mean an
-interrupted run isn't wasted money.
+interrupted run isn't wasted money. Sessions too large for the input budget
+(default 400k chars, `--input-budget`) are **refused before anything is
+spent** — re-run with `--truncate=extreme` to cut them (recorded in
+provenance) or narrow the scope. Digests run 3 at a time by default
+(`--concurrency`).
 
 **Subscription or API?**
 Either. cc-hindsight shells out to `claude -p`; however your CLI is
@@ -162,9 +170,11 @@ authenticated is how the calls are billed. `--model` passes through.
 **Why is a session missing from my exports?**
 Sessions with zero human messages are skipped naturally, `--min-messages`
 filters thin ones, and fork/resume copies are deduped into their original
-session. Run `export --verbose` to see every dropped piece with a reason — and
-if genuine human input was dropped, that's a bug: file an extraction-fidelity
-report.
+session. Note that dedupe is global across all projects: with `--project`, a
+message duplicated by fork/resume is attributed to its earliest session even
+when that session is outside the filter. Run `export --verbose` to see every
+dropped piece with a reason — and if genuine human input was dropped, that's a
+bug: file an extraction-fidelity report.
 
 **Can I regenerate everything from scratch?**
 `cc-hindsight distill --fresh` clears the checkpoints (after confirming) and

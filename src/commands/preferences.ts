@@ -80,7 +80,7 @@ export async function runPreferences(
     return 0;
   }
 
-  // --consolidate: one claude call, behind the same consent gate (F8).
+  // --consolidate: one claude call, behind the same consent gate as distill.
   write("consolidate will invoke your local `claude` CLI once (your subscription/credits).");
   const confirmed =
     Boolean(args.yes) || (await askYesNo("Proceed?", { input: deps.input, output: deps.output }));

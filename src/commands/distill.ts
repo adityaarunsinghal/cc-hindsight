@@ -11,6 +11,7 @@ import {
   confirm as defaultConfirm,
 } from "../claude/consent.js";
 import type { Digest } from "../claude/schemas.js";
+import { resolveInputBudget, resolveTimeoutMs, resolveTruncatePolicy } from "../core/budget.js";
 import {
   clearCheckpoints,
   loadDigests,
@@ -20,18 +21,13 @@ import {
   runDigestStage,
 } from "../distill/pipeline.js";
 import { bold, cyan, dim, hint } from "../ui/style.js";
-import { resolvePaths, sharedArgs } from "./_shared.js";
+import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 
-/** One entry of `exports/manifest.json` (§5.3). */
-export interface ManifestEntry {
-  export: string;
-  source: string;
-  project: string;
-  sessionId: string;
-  messages: number;
-  first_ts: string;
-  last_ts: string;
-}
+// One entry of `exports/manifest.json` — defined next to the code that writes
+// it; re-exported here because the distill plan is computed from it.
+export type { ManifestEntry } from "./export.js";
+
+import type { ManifestEntry } from "./export.js";
 
 /** Normalized args the distill core reads. */
 export interface DistillArgs {
@@ -45,6 +41,11 @@ export interface DistillArgs {
   fresh?: boolean;
   "dry-run"?: boolean;
   yes?: boolean;
+  "input-budget"?: string;
+  truncate?: string;
+  timeout?: string;
+  concurrency?: string;
+  force?: boolean;
 }
 
 /** The count math derived from the manifest, before consent. */
@@ -84,16 +85,22 @@ export function computePlan(
 }
 
 /**
- * Resume note (§5.7): when a digests checkpoint already holds some (but not
- * all) sessions, state how much is left. Best-effort — a missing or malformed
- * checkpoint simply yields no note.
+ * Resume note for the consent block: when a digests checkpoint already holds
+ * some (but not all) sessions, state how much is left. Best-effort — a missing
+ * or malformed checkpoint simply yields no note.
  */
 function computeResumeNote(home: string, plan: ComputedPlan, fresh: boolean): string | undefined {
   if (fresh) return undefined;
   try {
     const raw = fs.readFileSync(path.join(home, "distill", "digests.json"), "utf8");
     const data = JSON.parse(raw) as { digests?: Record<string, unknown> };
-    const done = data.digests ? Object.keys(data.digests).length : 0;
+    // Count only checkpoint entries that are ALSO in the currently eligible set.
+    // Without this intersection, digesting project A then running `--project B`
+    // would report "2 of 4 done" while all 4 of B actually run — a lie in a
+    // block that is otherwise a byte-pinned contract.
+    const doneKeys = data.digests ? Object.keys(data.digests) : [];
+    const eligible = new Set(plan.eligible.map((e) => e.export));
+    const done = doneKeys.filter((k) => eligible.has(k)).length;
     if (done > 0 && done < plan.digests) {
       const remaining = plan.digests - done;
       return `${done} of ${plan.digests} digests already done; will run ${remaining} + ${plan.cluster} + ~${plan.authorEstimate}`;
@@ -102,6 +109,29 @@ function computeResumeNote(home: string, plan: ComputedPlan, fresh: boolean): st
     // no checkpoint yet, or unreadable — no resume note
   }
   return undefined;
+}
+
+/**
+ * Consent-time (pre-spend) overflow estimate: which eligible sessions have an
+ * export larger than the budget. Uses cheap `statSync` byte sizes (no content
+ * read) — an estimate that the pipeline's exact char-length check refines. A
+ * missing export is left for the digest stage to report as a read failure.
+ */
+function computeOversized(
+  home: string,
+  eligible: ManifestEntry[],
+  budget: number,
+): { export: string; chars: number }[] {
+  const out: { export: string; chars: number }[] = [];
+  for (const e of eligible) {
+    try {
+      const { size } = fs.statSync(path.join(home, "exports", e.export));
+      if (size > budget) out.push({ export: e.export, chars: size });
+    } catch {
+      // missing/unreadable export — the digest stage reports it as a failure
+    }
+  }
+  return out;
 }
 
 /** Injectable dependencies (testing). */
@@ -115,11 +145,9 @@ export interface DistillDeps {
 
 /**
  * The distill command core. Returns the intended process exit code
- * (0 success/dry-run, 1 nothing exported / bad manifest, 2 consent declined)
- * so the caller can set `process.exitCode` and tests can assert without exiting.
- *
- * NOTE: the digest → cluster → author pipeline lands in Tasks 7–9. For now this
- * wires the consent gate and reports what *would* run.
+ * (0 success/dry-run, 1 nothing exported / bad manifest / stage failure,
+ * 2 consent declined) so the caller can set `process.exitCode` and tests can
+ * assert without exiting.
  */
 export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Promise<number> {
   const confirm = deps.confirm ?? defaultConfirm;
@@ -148,8 +176,11 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 1;
   }
 
-  const minSubstance = Number.parseInt(args["min-substance"] ?? "2", 10) || 2;
+  const minSubstance = parseClampedInt(args["min-substance"], { fallback: 2, min: 1 });
   const noGroup = args.group === false;
+  const budget = resolveInputBudget(args["input-budget"]);
+  const truncate = resolveTruncatePolicy(args.truncate);
+  const timeoutMs = resolveTimeoutMs(args.timeout);
   const plan = computePlan(entries, { project: args.project, minSubstance, noGroup });
 
   if (plan.digests === 0) {
@@ -158,21 +189,44 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 0;
   }
 
-  // --fresh clears checkpoints only after an explicit confirmation (§5.7).
-  // Dry-run never clears anything.
+  // Consent-time (pre-spend) overflow estimate.
+  const oversized = computeOversized(home, plan.eligible, budget);
+
+  // Default (--truncate=never): refuse BEFORE spending anything if any session
+  // exceeds the budget. Nothing is ever cut silently — the user chooses a flag.
+  // (Dry-run still previews the plan below and notes the would-be block.)
+  if (!args["dry-run"] && truncate === "never" && oversized.length > 0) {
+    write();
+    write(
+      `${oversized.length} session(s) exceed the input budget (${budget} chars); nothing was invoked:`,
+    );
+    for (const o of oversized) {
+      write(`  ⤬ ${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`);
+    }
+    write(
+      dim(
+        "re-run with --truncate=extreme to cut them middle-out, --input-budget <n> to raise the ceiling, or --project / --min-substance to narrow scope.",
+      ),
+    );
+    return 1;
+  }
+
+  // --fresh intent is confirmed up front, but the checkpoints are NOT deleted
+  // until the MAIN consent gate also passes: declining the invocation prompt
+  // after confirming --fresh must not have already destroyed paid progress
+  // while running nothing. Dry-run never clears anything.
+  let freshConfirmed = false;
   if (args.fresh && !args["dry-run"]) {
-    const confirmed =
+    freshConfirmed =
       Boolean(args.yes) ||
       (await askYesNo(
         "--fresh clears distill checkpoints (digest/cluster progress) and re-runs everything. Continue?",
         { input: deps.input, output: deps.output },
       ));
-    if (!confirmed) {
+    if (!freshConfirmed) {
       write("declined; checkpoints kept, nothing was invoked.");
       return 2;
     }
-    clearCheckpoints(home);
-    write("checkpoints cleared.");
   }
 
   const distillPlan: DistillPlan = {
@@ -180,6 +234,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     cluster: plan.cluster,
     authorEstimate: plan.authorEstimate,
     resumeNote: computeResumeNote(home, plan, Boolean(args.fresh)),
+    budget,
+    truncate,
+    oversized,
   };
 
   const decision = await confirm(distillPlan, {
@@ -199,6 +256,17 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     write(
       `${bold("author")}  — ~${plan.authorEstimate} task(s) (exact count known after clustering).`,
     );
+    if (oversized.length > 0) {
+      const verb =
+        truncate === "extreme"
+          ? "cut middle-out"
+          : "BLOCKED (re-run with --truncate=extreme or --input-budget)";
+      write();
+      write(`${bold("budget")}  — ${oversized.length} session(s) over ${budget} chars → ${verb}:`);
+      for (const o of oversized) {
+        write(`  ${dim("⤬")} ${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`);
+      }
+    }
     return 0;
   }
 
@@ -207,7 +275,13 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 2;
   }
 
-  // proceed — stage 1: digest (cluster and author land in Tasks 8–9)
+  // Both gates passed — only now is it safe to clear checkpoints.
+  if (freshConfirmed) {
+    clearCheckpoints(home);
+    write("checkpoints cleared.");
+  }
+
+  // proceed — stage 1: digest
   write();
   write(`digest — ${plan.digests} session(s):`);
   const digestResult = await runDigestStage({
@@ -216,6 +290,10 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     model: args.model,
     runner: deps.runner,
     output: deps.output,
+    budget,
+    truncate,
+    timeoutMs,
+    concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
   });
 
   const doneTotal = digestResult.completed + digestResult.skipped;
@@ -231,19 +309,44 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     for (const f of digestResult.failed) {
       write(`  ✗ ${f.export}: ${f.error}`);
     }
-    return 1;
+    // Do NOT abort here. A reproducibly-failing session must not block the
+    // whole pipeline forever — proceed to cluster/author with the digests that
+    // DID succeed (the cluster input already tolerates absent digests), and
+    // exit non-zero at the very end, after the useful work is done.
+  }
+
+  if (digestResult.blocked.length > 0) {
+    write();
+    write(
+      `blocked ${digestResult.blocked.length} session(s) exceeding the input budget (${budget} chars):`,
+    );
+    for (const b of digestResult.blocked) {
+      write(`  ⤬ ${b.export}: ${b.chars} chars`);
+    }
+    write(dim("  re-run with --truncate=extreme to cut them, or raise --input-budget."));
   }
 
   // stage 2: cluster — input is the checkpointed digests for the CURRENT
   // eligible set (sessions whose digest failed are simply absent).
-  write();
-  write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
   const digestCheckpoint = loadDigests(home);
   const digestsForCluster: Record<string, Digest> = {};
   for (const e of plan.eligible) {
     const digest = digestCheckpoint?.digests[e.export];
     if (digest) digestsForCluster[e.export] = digest;
   }
+
+  if (Object.keys(digestsForCluster).length === 0) {
+    write();
+    write("no sessions were successfully digested; nothing to cluster.");
+    return 1;
+  }
+
+  // Track whether ANY failure occurred so the command exits non-zero after
+  // completing the reachable work. Blocked-by-budget sessions count too.
+  let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
+
+  write();
+  write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
 
   try {
     const clusterResult = await runClusterStage({
@@ -254,6 +357,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       model: args.model,
       runner: deps.runner,
       output: deps.output,
+      budget,
+      timeoutMs,
     });
     for (const t of clusterResult.tasks) {
       write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
@@ -272,6 +377,10 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       model: args.model,
       runner: deps.runner,
       output: deps.output,
+      budget,
+      truncate,
+      timeoutMs,
+      force: args.force === true,
     });
 
     write();
@@ -282,7 +391,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
         (authorResult.skipped.length
           ? `, ${authorResult.skipped.length} task(s) skipped (no successful sessions)`
           : "") +
-        (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in _misc` : ""),
+        (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : ""),
     );
     for (const s of authorResult.skipped) {
       write(`  · skipped ${s.slug}: ${s.reason}`);
@@ -294,7 +403,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       for (const f of authorResult.failed) {
         write(`  ✗ ${f.export}: ${f.error}`);
       }
-      return 1;
+      hadFailure = true;
     }
   } catch (err) {
     write(`  ✗ ${(err as Error).message}`);
@@ -303,7 +412,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   }
 
   write(hint("cc-hindsight list"));
-  return 0;
+  // Exit non-zero if anything failed (digest or author), but only AFTER the
+  // reachable work completed and checkpointed.
+  return hadFailure ? 1 : 0;
 }
 
 export default defineCommand({
@@ -328,6 +439,27 @@ export default defineCommand({
     fresh: { type: "boolean", description: "Reset distill checkpoints and start over" },
     "dry-run": { type: "boolean", description: "Print the invocation plan and exit; run nothing" },
     yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
+    "input-budget": {
+      type: "string",
+      description: "Max characters of session content per claude call (default 400000)",
+    },
+    truncate: {
+      type: "string",
+      description:
+        "Overflow policy when content exceeds the budget: never (default, block & report) or extreme (cut middle-out)",
+    },
+    timeout: {
+      type: "string",
+      description: "Per-claude-call timeout in seconds (default 300)",
+    },
+    concurrency: {
+      type: "string",
+      description: "Digest calls run in parallel (default 3; 1 = sequential)",
+    },
+    force: {
+      type: "boolean",
+      description: "Re-author over oneshots you edited by hand (default: keep your edits)",
+    },
   },
   async run({ args }) {
     const code = await runDistill(args as unknown as DistillArgs);

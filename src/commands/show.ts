@@ -43,12 +43,17 @@ export default defineCommand({
 
     const { title, body } = parseOneshot(content);
     const s = entry.sources;
+    const coverage =
+      typeof s.input_coverage === "number" && s.input_coverage < 1
+        ? ` · ${(s.input_coverage * 100).toFixed(1)}% of sources (truncated)`
+        : "";
     console.log(bold(`# ${title ?? s.title ?? slug}`));
     console.log(
       dim(
         `${s.members?.length ?? 0} session(s) · ${s.outcome_summary ?? "?"} · ` +
           `confidence ${s.confidence ?? "?"} · authored ${(s.authored_at ?? "").slice(0, 10)}` +
-          (s.domains?.length ? ` · domain: ${s.domains.join(", ")}` : ""),
+          (s.domains?.length ? ` · domain: ${s.domains.join(", ")}` : "") +
+          coverage,
       ),
     );
     console.log();

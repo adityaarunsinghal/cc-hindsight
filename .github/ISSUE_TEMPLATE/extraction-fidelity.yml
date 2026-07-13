@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: cc-hindsight version + Claude Code version
-      placeholder: cc-hindsight 0.1.0 / claude 2.1.207
+      placeholder: cc-hindsight 0.1.1 / claude 2.1.207
     validations:
       required: true
   - type: dropdown

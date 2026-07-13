@@ -1,9 +1,18 @@
 import { defineCommand } from "citty";
-import { readLibrary } from "../core/library.js";
+import { isEdited, readLibrary } from "../core/library.js";
 import { bold, dim, green, hint, magenta, red, table, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 const CONFIDENCE_COLOR = { high: green, medium: yellow, low: red } as const;
+
+/** Badge column: hand-edited marker + rating verdict. */
+function badges(edited: boolean, rating: "up" | "down" | null | undefined): string {
+  const parts: string[] = [];
+  if (edited) parts.push(yellow("✎ edited"));
+  if (rating === "up") parts.push(green("▲"));
+  if (rating === "down") parts.push(red("▼"));
+  return parts.join(" ");
+}
 
 export default defineCommand({
   meta: {
@@ -28,10 +37,11 @@ export default defineCommand({
           e.sources.title,
           magenta(e.sources.domains.join(", ")),
           String(e.sources.members.length),
-          CONFIDENCE_COLOR[e.sources.confidence](e.sources.confidence),
+          (CONFIDENCE_COLOR[e.sources.confidence] ?? dim)(e.sources.confidence),
           dim(e.sources.authored_at.slice(0, 10)),
+          badges(isEdited(e), e.sources.rating),
         ]),
-        { header: ["Slug", "Title", "Domain", "Sessions", "Confidence", "Authored"] },
+        { header: ["Slug", "Title", "Domain", "Sessions", "Confidence", "Authored", ""] },
       ),
     );
     console.log();

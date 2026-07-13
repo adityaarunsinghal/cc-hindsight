@@ -1,7 +1,7 @@
 import type { Digest } from "../schemas.js";
 
 /**
- * Stage 2 — cluster prompt builder (PLAN §5.6).
+ * Stage 2 — cluster prompt builder.
  *
  * One call total: every session digest goes in; a task grouping comes out.
  * Grouping rules enforced here (and validated in the pipeline — slug
@@ -12,8 +12,8 @@ import type { Digest } from "../schemas.js";
  *   - dual membership allowed when a session genuinely served two goals
  *     (explained in the rationale);
  *   - unique 2–5-word kebab-case slugs;
- *   - low-substance / trivia sessions route to `_misc` (they author no
- *     oneshot) — flaw 4's disposition: junk must not dilute real tasks.
+ *   - low-substance / trivia sessions route to `misc` (they author no
+ *     oneshot) — junk must not dilute real tasks.
  *
  * `CLUSTER_PROMPT_VERSION` is recorded in provenance downstream; bump it on
  * any meaningful change to the prompt text.

@@ -1,5 +1,5 @@
 /**
- * core/outcome.ts — bounded outcome-evidence pass (PLAN §5.5, F11, flaw 1).
+ * core/outcome.ts — the bounded outcome-evidence pass.
  *
  * Without any signal of whether a session succeeded, failed, or was abandoned,
  * the distill stages would confidently author "ideal" prompts that reproduce
@@ -13,8 +13,7 @@
  *
  * This is distill INPUT ONLY — the human-only export artifact is unaffected. The
  * assistant text is machine-authored and is never copied into a oneshot; the
- * `_note` written alongside the data (see the export command) states this per
- * F11/§5.5.
+ * `_note` written alongside the data (see the export command) states this.
  */
 
 import { TAIL_CHARS } from "./anaphora.js";
@@ -30,7 +29,7 @@ export const FINAL_TURNS = 3;
 
 /**
  * A top-level `_note` for `outcomes.json` labeling the assistant text as
- * machine-authored context (F11/§5.5) — it is never surfaced in an export or a
+ * machine-authored context — it is never surfaced in an export or a
  * oneshot, only fed to the outcome-classification stage of distill.
  */
 export const OUTCOME_NOTE =

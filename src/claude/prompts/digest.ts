@@ -1,42 +1,18 @@
 import type { OutcomeEvidence } from "../../core/outcome.js";
 
 /**
- * Stage 1 — digest prompt builder (PLAN §5.6).
+ * Stage 1 — digest prompt builder.
  *
- * One call per session: the export content (capped, head+tail split for
- * monsters) plus the session's labeled outcome evidence go in; a structured
- * `{goal, deliverable, domain, keywords, outcome}` digest comes out.
+ * One call per session: the export content plus the session's labeled outcome
+ * evidence go in; a structured `{goal, deliverable, domain, keywords, outcome}`
+ * digest comes out. Input budgeting/overflow is the pipeline's job
+ * (core/budget.ts) — this builder inlines whatever content it is handed,
+ * which the pipeline has already kept within budget (or blocked).
  *
  * `DIGEST_PROMPT_VERSION` is recorded in provenance downstream and MUST be
  * bumped on any meaningful change to the prompt text.
  */
 export const DIGEST_PROMPT_VERSION = 1;
-
-/** Cap on inlined export content (~50k chars, §5.6 / risk table). */
-export const DIGEST_CONTENT_CAP = 50_000;
-
-/**
- * Cap `content` at `cap` chars. Small content passes through untouched; monster
- * sessions keep their head and tail (the goal statement lives at the start,
- * the resolution at the end) with an explicit truncation note in between so
- * the model knows material is missing.
- */
-export function capContent(content: string, cap = DIGEST_CONTENT_CAP): string {
-  if (content.length <= cap) return content;
-  const note = (dropped: number) =>
-    `\n\n[... cc-hindsight truncated ${dropped} characters from the middle of this session ...]\n\n`;
-  // Reserve room for the note (its length varies with the count's digits;
-  // one extra pass settles it).
-  let dropped = content.length - cap;
-  let marker = note(dropped);
-  let keep = cap - marker.length;
-  dropped = content.length - keep;
-  marker = note(dropped);
-  keep = cap - marker.length;
-  const head = Math.ceil(keep / 2);
-  const tail = keep - head;
-  return content.slice(0, head) + marker + content.slice(content.length - tail);
-}
 
 /** Input to {@link buildDigestPrompt}. */
 export interface DigestPromptInput {
@@ -52,7 +28,7 @@ export interface DigestPromptInput {
  * Build the stage-1 digest prompt. The session content is human-authored
  * input only; outcome evidence is appended in a clearly-labeled block (the
  * assistant tail is machine-authored and used ONLY to judge how the session
- * ended — F11).
+ * ended).
  */
 export function buildDigestPrompt(input: DigestPromptInput): string {
   const parts: string[] = [];
@@ -76,7 +52,7 @@ export function buildDigestPrompt(input: DigestPromptInput): string {
     '    "unclear"   — the evidence does not show how it ended.',
     "",
     "=== HUMAN MESSAGES (the session) ===",
-    capContent(input.content),
+    input.content,
     "=== END HUMAN MESSAGES ===",
   );
 
