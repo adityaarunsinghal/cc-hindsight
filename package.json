@@ -4,6 +4,24 @@
   "description": "Mine your Claude Code session history into a oneshot prompt library and CLAUDE.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "prompt",
+    "prompt-library",
+    "prompt-engineering",
+    "cli",
+    "transcripts",
+    "local-first"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adityaarunsinghal/cc-hindsight.git"
+  },
+  "homepage": "https://github.com/adityaarunsinghal/cc-hindsight#readme",
+  "bugs": {
+    "url": "https://github.com/adityaarunsinghal/cc-hindsight/issues"
+  },
   "bin": {
     "cc-hindsight": "./dist/cli.js"
   },
