@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
 import { discoverProjects } from "../core/discover.js";
-import { dim, hint, table } from "../ui/style.js";
+import { cyan, dim, green, hint, table } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 /** Format a Date as a human, sortable day stamp: `2026-07-13`. */
@@ -30,17 +30,17 @@ export function runScan(args: { home?: string; "claude-dir"?: string }): void {
   );
 
   const rows = sorted.map((p) => [
-    p.shortName,
+    cyan(p.shortName),
     String(p.sessions.length),
     String(p.entryTotal),
-    p.latestMtime ? formatDate(p.latestMtime) : "-",
+    p.latestMtime ? dim(formatDate(p.latestMtime)) : dim("-"),
   ]);
 
   console.log(table(rows, { header: ["Project", "Sessions", "Entries", "Latest"] }));
 
   const sessionTotal = projects.reduce((sum, p) => sum + p.sessions.length, 0);
   console.log("");
-  console.log(`${projects.length} projects, ${sessionTotal} sessions`);
+  console.log(green(`${projects.length} projects, ${sessionTotal} sessions`));
   console.log(hint("cc-hindsight export"));
 }
 

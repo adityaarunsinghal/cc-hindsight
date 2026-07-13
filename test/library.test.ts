@@ -37,6 +37,7 @@ function writeEntry(
     sessionIds: ["sid-a"],
     preferences: [],
     outcome_summary: "1 completed",
+    domains: ["testing"],
     confidence: "high",
     authored_at: "2026-07-01T00:00:00.000Z",
     model: null,

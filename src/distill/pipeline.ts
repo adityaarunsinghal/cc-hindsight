@@ -468,6 +468,12 @@ export interface SourcesJson {
   preferences: Preference[];
   /** e.g. "2 completed, 1 partial" — from the member digests. */
   outcome_summary: string;
+  /**
+   * High-level kind(s) of work, from the member digests' `domain` field —
+   * the transferability signal when browsing ("is this oneshot about the
+   * same sort of task I'm starting?").
+   */
+  domains: string[];
   confidence: "high" | "medium" | "low";
   authored_at: string;
   /** `--model` value, or null when the claude CLI default was used. */
@@ -632,6 +638,13 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         sessionIds: task.members.map((m) => sessionIdByExport.get(m) ?? "unknown"),
         preferences: authored.preferences,
         outcome_summary: summarizeOutcomes(task.members, opts.digests),
+        domains: [
+          ...new Set(
+            task.members
+              .map((m) => opts.digests[m]?.domain.trim().toLowerCase())
+              .filter((d): d is string => Boolean(d)),
+          ),
+        ],
         confidence: authored.confidence,
         authored_at: new Date().toISOString(),
         model: opts.model ?? null,

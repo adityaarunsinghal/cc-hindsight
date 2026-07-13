@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { defineCommand } from "citty";
 import { findEntry, parseOneshot } from "../core/library.js";
+import { renderMarkdownAnsi } from "../ui/markdown.js";
 import { bold, dim, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -15,6 +16,10 @@ export default defineCommand({
       type: "positional",
       description: "Library entry slug",
       required: true,
+    },
+    raw: {
+      type: "boolean",
+      description: "Print the oneshot as raw markdown (no styling or wrapping)",
     },
   },
   run({ args }) {
@@ -42,11 +47,17 @@ export default defineCommand({
     console.log(
       dim(
         `${s.members?.length ?? 0} session(s) · ${s.outcome_summary ?? "?"} · ` +
-          `confidence ${s.confidence ?? "?"} · authored ${(s.authored_at ?? "").slice(0, 10)}`,
+          `confidence ${s.confidence ?? "?"} · authored ${(s.authored_at ?? "").slice(0, 10)}` +
+          (s.domains?.length ? ` · domain: ${s.domains.join(", ")}` : ""),
       ),
     );
     console.log();
-    console.log(body);
+    if (args.raw || !process.stdout.isTTY) {
+      // Raw markdown for piping (`show x | pbcopy`) and for --raw.
+      console.log(body);
+    } else {
+      console.log(renderMarkdownAnsi(body));
+    }
     console.log();
     console.log(hint(`cc-hindsight copy ${slug}`));
   },

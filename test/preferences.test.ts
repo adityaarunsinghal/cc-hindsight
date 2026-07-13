@@ -45,6 +45,7 @@ function entry(
       sessionIds: ["s"],
       preferences: prefs,
       outcome_summary: "1 completed",
+      domains: ["testing"],
       confidence: "high",
       authored_at: authoredAt,
       model: null,
@@ -126,7 +127,7 @@ describe("aggregatePreferences", () => {
 });
 
 describe("renderClaudeMdBlock", () => {
-  it("emits the paste-ready block with evidence counts", () => {
+  it("groups the paste-ready block by occurrence count, most-stated first", () => {
     const entries = [
       entry("t-one-a", [{ text: "diagnose before acting", evidence: "e" }]),
       entry("t-two-b", [{ text: "diagnose before acting", evidence: "e" }]),
@@ -137,10 +138,26 @@ describe("renderClaudeMdBlock", () => {
       3,
       new Date("2026-07-13T00:00:00Z"),
     );
-    expect(block).toContain("<!-- cc-hindsight preferences · generated 2026-07-13 -->");
-    expect(block).toContain("## Working preferences");
-    expect(block).toContain("- diagnose before acting <!-- stated in 2 of 3 tasks -->");
-    expect(block).toContain("- pin versions <!-- stated in 1 of 3 tasks -->");
+    expect(block.split("\n")).toEqual([
+      "<!-- cc-hindsight preferences · generated 2026-07-13 -->",
+      "## Working preferences",
+      "",
+      "<!-- stated in 2 of 3 tasks -->",
+      "- diagnose before acting",
+      "",
+      "<!-- stated in 1 of 3 tasks -->",
+      "- pin versions",
+    ]);
+  });
+
+  it("renders consolidated items (no occurrences) as a flat list without headers", () => {
+    const merged = [
+      { text: "be terse", count: 3, occurrences: [], lastAuthoredAt: "" },
+      { text: "pin versions", count: 1, occurrences: [], lastAuthoredAt: "" },
+    ];
+    const block = renderClaudeMdBlock(merged, 5, new Date("2026-07-13T00:00:00Z"));
+    expect(block).toContain("- be terse");
+    expect(block).not.toContain("stated in");
   });
 });
 

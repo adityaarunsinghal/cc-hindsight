@@ -79,8 +79,10 @@ export function aggregatePreferences(entries: LibraryEntry[]): AggregatedPrefere
 }
 
 /**
- * Render the paste-ready `CLAUDE.md` block: a comment header, one bullet per
- * preference, an evidence count per line ("stated in 7 of 12 tasks").
+ * Render the paste-ready `CLAUDE.md` block. Preferences are grouped by how
+ * many tasks stated them, one comment header per group (most-stated first) —
+ * repeating the count on every line drowned the signal when most items occur
+ * once. Consolidated items (no per-task occurrences) render as a flat list.
  */
 export function renderClaudeMdBlock(
   prefs: AggregatedPreference[],
@@ -90,14 +92,17 @@ export function renderClaudeMdBlock(
   const lines = [
     `<!-- cc-hindsight preferences · generated ${now.toISOString().slice(0, 10)} -->`,
     "## Working preferences",
-    "",
   ];
+  const grouped = taskCount > 1 && prefs.every((p) => p.occurrences.length > 0);
+  let currentCount: number | null = null;
   for (const p of prefs) {
-    const evidence =
-      taskCount > 1 && p.occurrences.length > 0
-        ? ` <!-- stated in ${p.count} of ${taskCount} tasks -->`
-        : "";
-    lines.push(`- ${p.text}${evidence}`);
+    if (grouped && p.count !== currentCount) {
+      currentCount = p.count;
+      lines.push("", `<!-- stated in ${p.count} of ${taskCount} tasks -->`);
+    } else if (!grouped && lines.length === 2) {
+      lines.push("");
+    }
+    lines.push(`- ${p.text}`);
   }
   return lines.join("\n");
 }

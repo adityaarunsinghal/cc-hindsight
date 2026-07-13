@@ -9,7 +9,7 @@ import {
   renderClaudeMdBlock,
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
-import { dim, hint } from "../ui/style.js";
+import { cyan, dim, green, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 /** Injectable dependencies (testing). */
@@ -66,8 +66,8 @@ export async function runPreferences(
 
   const recurring = prefs.filter((p) => p.count > 1).length;
   write(
-    `${prefs.length} preference(s) across ${entries.length} task(s)` +
-      (recurring ? ` (${recurring} recur)` : ""),
+    green(`${prefs.length} preference(s) across ${entries.length} task(s)`) +
+      (recurring ? cyan(` (${recurring} recur)`) : ""),
   );
   write();
 

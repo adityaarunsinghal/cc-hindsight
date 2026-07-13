@@ -62,6 +62,8 @@ describe("scan command", () => {
     // First table column holds the project short name; read them in row order.
     const order = out
       .split("\n")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI styling
+      .map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""))
       .map((line) => line.split("  ")[0]?.trim() ?? "")
       .filter((name) => names.includes(name));
     expect(order).toEqual(["api", "webapp", "app", "webapp-2", "empty"]);

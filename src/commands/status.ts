@@ -4,7 +4,7 @@ import { defineCommand } from "citty";
 import { discoverProjects } from "../core/discover.js";
 import { readLibrary } from "../core/library.js";
 import { loadDigests, loadTasks, summarizeOutcomes } from "../distill/pipeline.js";
-import { dim, green, hint, yellow } from "../ui/style.js";
+import { bold, dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import type { ManifestEntry } from "./distill.js";
 
@@ -36,9 +36,9 @@ export function renderStatus(opts: { home: string; claudeDir: string }): string 
   const digested = digests ? Object.keys(digests.digests).length : 0;
 
   lines.push(
-    `discovered  ${discovered ?? "?"} session(s)${discovered === null ? " (claude dir not found)" : ""}`,
-    `exported    ${exported} session(s)`,
-    `digested    ${digested} session(s)${digests ? dim(`  (generation ${digests.generation})`) : ""}`,
+    `discovered  ${bold(String(discovered ?? "?"))} session(s)${discovered === null ? " (claude dir not found)" : ""}`,
+    `exported    ${bold(String(exported))} session(s)`,
+    `digested    ${bold(String(digested))} session(s)${digests ? dim(`  (generation ${digests.generation})`) : ""}`,
   );
 
   if (!tasks) {
@@ -50,13 +50,13 @@ export function renderStatus(opts: { home: string; claudeDir: string }): string 
   }
 
   lines.push(
-    `clustered   ${tasks.tasks.length} task(s), ${tasks.misc.length} in _misc` +
+    `clustered   ${bold(String(tasks.tasks.length))} task(s), ${tasks.misc.length} in _misc` +
       dim(`  (generation ${tasks.generation})`),
   );
 
   const bySlug = new Map(library.map((e) => [e.slug, e]));
   const current = library.filter((e) => e.sources.generation === tasks.generation);
-  lines.push(`authored    ${current.length} of ${tasks.tasks.length} task(s)`);
+  lines.push(`authored    ${bold(String(current.length))} of ${tasks.tasks.length} task(s)`);
 
   for (const task of tasks.tasks) {
     const entry = bySlug.get(task.slug);

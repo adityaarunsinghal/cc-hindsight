@@ -1,7 +1,9 @@
 import { defineCommand } from "citty";
 import { readLibrary } from "../core/library.js";
-import { hint, table } from "../ui/style.js";
+import { bold, dim, green, hint, magenta, red, table, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+
+const CONFIDENCE_COLOR = { high: green, medium: yellow, low: red } as const;
 
 export default defineCommand({
   meta: {
@@ -22,17 +24,18 @@ export default defineCommand({
     console.log(
       table(
         entries.map((e) => [
-          e.slug,
-          e.sources.title ?? "",
-          String(e.sources.members?.length ?? 0),
-          e.sources.confidence ?? "?",
-          (e.sources.authored_at ?? "").slice(0, 10),
+          bold(e.slug),
+          e.sources.title,
+          magenta(e.sources.domains.join(", ")),
+          String(e.sources.members.length),
+          CONFIDENCE_COLOR[e.sources.confidence](e.sources.confidence),
+          dim(e.sources.authored_at.slice(0, 10)),
         ]),
-        { header: ["Slug", "Title", "Sessions", "Confidence", "Authored"] },
+        { header: ["Slug", "Title", "Domain", "Sessions", "Confidence", "Authored"] },
       ),
     );
     console.log();
-    console.log(`${entries.length} librar${entries.length === 1 ? "y entry" : "y entries"}`);
+    console.log(green(`${entries.length} librar${entries.length === 1 ? "y entry" : "y entries"}`));
     console.log(hint("cc-hindsight show <slug>"));
   },
 });

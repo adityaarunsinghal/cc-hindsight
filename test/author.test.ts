@@ -231,6 +231,7 @@ describe("runAuthorStage", () => {
       members: ["a.md"],
       sessionIds: ["sid-a.md"],
       outcome_summary: "1 completed",
+      domains: ["dom"],
       confidence: "high",
       model: null,
       prompt_version: AUTHOR_PROMPT_VERSION,
