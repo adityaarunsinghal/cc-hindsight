@@ -3,11 +3,13 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
 import {
+  askYesNo,
   type ConsentOptions,
   type ConsentResult,
   type DistillPlan,
   confirm as defaultConfirm,
 } from "../claude/consent.js";
+import { clearCheckpoints, type RunnerFn, runDigestStage } from "../distill/pipeline.js";
 import { hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -96,6 +98,8 @@ function computeResumeNote(home: string, plan: ComputedPlan, fresh: boolean): st
 /** Injectable dependencies (testing). */
 export interface DistillDeps {
   confirm?: (plan: DistillPlan, opts: ConsentOptions) => Promise<ConsentResult>;
+  /** Stage runner passed to the pipeline (default: real runClaude). */
+  runner?: RunnerFn;
   input?: Readable;
   output?: Writable;
 }
@@ -145,6 +149,23 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 0;
   }
 
+  // --fresh clears checkpoints only after an explicit confirmation (§5.7).
+  // Dry-run never clears anything.
+  if (args.fresh && !args["dry-run"]) {
+    const confirmed =
+      Boolean(args.yes) ||
+      (await askYesNo(
+        "--fresh clears distill checkpoints (digest/cluster progress) and re-runs everything. Continue?",
+        { input: deps.input, output: deps.output },
+      ));
+    if (!confirmed) {
+      write("declined; checkpoints kept, nothing was invoked.");
+      return 2;
+    }
+    clearCheckpoints(home);
+    write("checkpoints cleared.");
+  }
+
   const distillPlan: DistillPlan = {
     digests: plan.digests,
     cluster: plan.cluster,
@@ -175,12 +196,35 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 2;
   }
 
-  // proceed — pipeline arrives in Tasks 7–9
+  // proceed — stage 1: digest (cluster and author land in Tasks 8–9)
   write();
-  write("pipeline not implemented yet (digest → cluster → author land in Tasks 7–9).");
+  write(`digest — ${plan.digests} session(s):`);
+  const digestResult = await runDigestStage({
+    home,
+    entries: plan.eligible,
+    model: args.model,
+    runner: deps.runner,
+    output: deps.output,
+  });
+
+  const doneTotal = digestResult.completed + digestResult.skipped;
   write(
-    `would run: ${plan.digests} digest call(s) + ${plan.cluster} cluster call + ~${plan.authorEstimate} author call(s).`,
+    `digest stage: ${doneTotal}/${plan.digests} done` +
+      (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
+      (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : ""),
   );
+
+  if (digestResult.failed.length > 0) {
+    write();
+    write("failed sessions (progress is checkpointed; re-run to retry):");
+    for (const f of digestResult.failed) {
+      write(`  ✗ ${f.export}: ${f.error}`);
+    }
+    return 1;
+  }
+
+  write();
+  write("cluster + author stages land in Tasks 8–9.");
   write(hint("cc-hindsight list"));
   return 0;
 }

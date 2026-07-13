@@ -78,6 +78,22 @@ function ask(question: string, input: Readable, output: Writable): Promise<strin
 }
 
 /**
+ * Generic `[y/N]` confirmation on injected streams (default No). Used for
+ * secondary gates like `distill --fresh` (§5.7: checkpoints are cleared only
+ * after an explicit confirmation).
+ */
+export async function askYesNo(
+  question: string,
+  opts: { input?: Readable; output?: Writable } = {},
+): Promise<boolean> {
+  const input = opts.input ?? process.stdin;
+  const output = opts.output ?? process.stdout;
+  const answer = await ask(`${question} [y/N] `, input, output);
+  const norm = answer.trim().toLowerCase();
+  return norm === "y" || norm === "yes";
+}
+
+/**
  * Show the plan and obtain consent. Returns:
  *   - `dry-run` when `opts.dryRun` (plan printed, stdin never touched);
  *   - `proceed` when `opts.yes` (stdin never touched) or the user answers y/yes;

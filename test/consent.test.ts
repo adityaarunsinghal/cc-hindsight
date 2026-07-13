@@ -10,6 +10,7 @@ import {
   renderPlan,
 } from "../src/claude/consent.js";
 import { computePlan, type ManifestEntry, runDistill } from "../src/commands/distill.js";
+import type { RunnerFn } from "../src/distill/pipeline.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -237,13 +238,70 @@ describe("runDistill", () => {
     expect(cap.text()).toContain("declined");
   });
 
-  it("exits 0 and reports the placeholder pipeline on proceed", async () => {
+  it("runs the digest stage on proceed and writes the checkpoint", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
+    fs.writeFileSync(path.join(home, "exports", "b"), "### 2026-01-02\n\nfix the bug\n");
     const confirmSpy = async (): Promise<ConsentResult> => "proceed";
-    const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out });
+    const digest = {
+      goal: "g",
+      deliverable: "d",
+      domain: "dom",
+      keywords: ["k"],
+      outcome: "completed",
+    };
+    const runner = (async () => digest) as RunnerFn;
+    const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
     expect(code).toBe(0);
-    expect(cap.text()).toContain("pipeline not implemented yet");
+    expect(cap.text()).toContain("digest stage: 2/2 done");
+    const cp = JSON.parse(fs.readFileSync(path.join(home, "distill", "digests.json"), "utf8"));
+    expect(Object.keys(cp.digests).sort()).toEqual(["a", "b"]);
+  });
+
+  it("--fresh declined keeps checkpoints and exits 2", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    const cpPath = path.join(home, "distill", "digests.json");
+    fs.writeFileSync(cpPath, JSON.stringify({ generation: "g", digests: {} }));
+    const code = await runDistill(
+      { home, fresh: true },
+      { output: cap.out, input: inputWith("n\n") },
+    );
+    expect(code).toBe(2);
+    expect(fs.existsSync(cpPath)).toBe(true);
+    expect(cap.text()).toContain("checkpoints kept");
+  });
+
+  it("--fresh with --yes clears checkpoints without prompting", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nhello\n");
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    const cpPath = path.join(home, "distill", "digests.json");
+    fs.writeFileSync(
+      cpPath,
+      JSON.stringify({ generation: "old", prompt_version: 1, digests: { a: {} } }),
+    );
+    const digest = {
+      goal: "g",
+      deliverable: "d",
+      domain: "dom",
+      keywords: ["k"],
+      outcome: "partial",
+    };
+    const runner = (async () => digest) as RunnerFn;
+    const code = await runDistill(
+      { home, fresh: true, yes: true },
+      { output: cap.out, input: forbiddenInput(), runner },
+    );
+    expect(code).toBe(0);
+    expect(cap.text()).toContain("checkpoints cleared.");
+    // Old checkpoint replaced: new generation, freshly digested.
+    const cp = JSON.parse(fs.readFileSync(cpPath, "utf8"));
+    expect(cp.generation).not.toBe("old");
+    expect(Object.keys(cp.digests)).toEqual(["a"]);
   });
 
   it("surfaces a resume note when a digests checkpoint exists", async () => {
