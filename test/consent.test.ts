@@ -255,16 +255,32 @@ describe("runDistill", () => {
       tasks: [{ slug: "the-whole-task", title: "t", rationale: "r", members: ["a", "b"] }],
       misc: [],
     };
-    const runner = (async (opts: { prompt: string }) =>
-      opts.prompt.includes("grouping Claude Code sessions") ? cluster : digest) as RunnerFn;
+    const authored = {
+      slug: "the-whole-task",
+      title: "The Whole Task",
+      oneshot_markdown: "Do the whole thing well.",
+      confidence: "high",
+      preferences: [],
+    };
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
+      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      return digest;
+    }) as RunnerFn;
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
     expect(code).toBe(0);
     expect(cap.text()).toContain("digest stage: 2/2 done");
     expect(cap.text()).toContain("the-whole-task (2 sessions)");
+    expect(cap.text()).toContain("library: 1 entry authored");
     const cp = JSON.parse(fs.readFileSync(path.join(home, "distill", "digests.json"), "utf8"));
     expect(Object.keys(cp.digests).sort()).toEqual(["a", "b"]);
     const tasks = JSON.parse(fs.readFileSync(path.join(home, "distill", "tasks.json"), "utf8"));
     expect(tasks.tasks[0].slug).toBe("the-whole-task");
+    const oneshot = fs.readFileSync(
+      path.join(home, "library", "the-whole-task", "the-whole-task.oneshot.md"),
+      "utf8",
+    );
+    expect(oneshot).toContain("Do the whole thing well.");
   });
 
   it("--fresh declined keeps checkpoints and exits 2", async () => {
@@ -303,8 +319,18 @@ describe("runDistill", () => {
       tasks: [{ slug: "fresh-run-task", title: "t", rationale: "r", members: ["a"] }],
       misc: [],
     };
-    const runner = (async (opts: { prompt: string }) =>
-      opts.prompt.includes("grouping Claude Code sessions") ? cluster : digest) as RunnerFn;
+    const authored = {
+      slug: "fresh-run-task",
+      title: "Fresh",
+      oneshot_markdown: "Redo it.",
+      confidence: "medium",
+      preferences: [],
+    };
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
+      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      return digest;
+    }) as RunnerFn;
     const code = await runDistill(
       { home, fresh: true, yes: true },
       { output: cap.out, input: forbiddenInput(), runner },

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
+import pkg from "../../package.json" with { type: "json" };
 import {
   askYesNo,
   type ConsentOptions,
@@ -14,6 +15,7 @@ import {
   clearCheckpoints,
   loadDigests,
   type RunnerFn,
+  runAuthorStage,
   runClusterStage,
   runDigestStage,
 } from "../distill/pipeline.js";
@@ -254,14 +256,50 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     for (const t of clusterResult.tasks) {
       write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
     }
+
+    // stage 3: author — one call per viable task; the library IS the checkpoint.
+    write();
+    write(`author — ${clusterResult.tasks.length} task(s):`);
+    const authorResult = await runAuthorStage({
+      home,
+      tasks: clusterResult.tasks,
+      digests: digestsForCluster,
+      entries: plan.eligible,
+      generation: digestResult.generation,
+      toolVersion: pkg.version,
+      model: args.model,
+      runner: deps.runner,
+      output: deps.output,
+    });
+
+    write();
+    const authoredTotal = authorResult.authored.length + authorResult.resumed.length;
+    write(
+      `library: ${authoredTotal} entr${authoredTotal === 1 ? "y" : "ies"} authored` +
+        (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
+        (authorResult.skipped.length
+          ? `, ${authorResult.skipped.length} task(s) skipped (no successful sessions)`
+          : "") +
+        (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in _misc` : ""),
+    );
+    for (const s of authorResult.skipped) {
+      write(`  · skipped ${s.slug}: ${s.reason}`);
+    }
+
+    if (authorResult.failed.length > 0) {
+      write();
+      write("failed tasks (authored entries are kept; re-run to retry):");
+      for (const f of authorResult.failed) {
+        write(`  ✗ ${f.export}: ${f.error}`);
+      }
+      return 1;
+    }
   } catch (err) {
     write(`  ✗ ${(err as Error).message}`);
     write("  digest progress is checkpointed; re-run to retry clustering.");
     return 1;
   }
 
-  write();
-  write("author stage lands in Task 9.");
   write(hint("cc-hindsight list"));
   return 0;
 }
