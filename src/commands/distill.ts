@@ -9,7 +9,14 @@ import {
   type DistillPlan,
   confirm as defaultConfirm,
 } from "../claude/consent.js";
-import { clearCheckpoints, type RunnerFn, runDigestStage } from "../distill/pipeline.js";
+import type { Digest } from "../claude/schemas.js";
+import {
+  clearCheckpoints,
+  loadDigests,
+  type RunnerFn,
+  runClusterStage,
+  runDigestStage,
+} from "../distill/pipeline.js";
 import { hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -223,8 +230,38 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 1;
   }
 
+  // stage 2: cluster — input is the checkpointed digests for the CURRENT
+  // eligible set (sessions whose digest failed are simply absent).
   write();
-  write("cluster + author stages land in Tasks 8–9.");
+  write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
+  const digestCheckpoint = loadDigests(home);
+  const digestsForCluster: Record<string, Digest> = {};
+  for (const e of plan.eligible) {
+    const digest = digestCheckpoint?.digests[e.export];
+    if (digest) digestsForCluster[e.export] = digest;
+  }
+
+  try {
+    const clusterResult = await runClusterStage({
+      home,
+      digests: digestsForCluster,
+      generation: digestResult.generation,
+      noGroup,
+      model: args.model,
+      runner: deps.runner,
+      output: deps.output,
+    });
+    for (const t of clusterResult.tasks) {
+      write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
+    }
+  } catch (err) {
+    write(`  ✗ ${(err as Error).message}`);
+    write("  digest progress is checkpointed; re-run to retry clustering.");
+    return 1;
+  }
+
+  write();
+  write("author stage lands in Task 9.");
   write(hint("cc-hindsight list"));
   return 0;
 }

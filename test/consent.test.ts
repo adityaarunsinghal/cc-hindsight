@@ -251,12 +251,20 @@ describe("runDistill", () => {
       keywords: ["k"],
       outcome: "completed",
     };
-    const runner = (async () => digest) as RunnerFn;
+    const cluster = {
+      tasks: [{ slug: "the-whole-task", title: "t", rationale: "r", members: ["a", "b"] }],
+      misc: [],
+    };
+    const runner = (async (opts: { prompt: string }) =>
+      opts.prompt.includes("grouping Claude Code sessions") ? cluster : digest) as RunnerFn;
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
     expect(code).toBe(0);
     expect(cap.text()).toContain("digest stage: 2/2 done");
+    expect(cap.text()).toContain("the-whole-task (2 sessions)");
     const cp = JSON.parse(fs.readFileSync(path.join(home, "distill", "digests.json"), "utf8"));
     expect(Object.keys(cp.digests).sort()).toEqual(["a", "b"]);
+    const tasks = JSON.parse(fs.readFileSync(path.join(home, "distill", "tasks.json"), "utf8"));
+    expect(tasks.tasks[0].slug).toBe("the-whole-task");
   });
 
   it("--fresh declined keeps checkpoints and exits 2", async () => {
@@ -291,7 +299,12 @@ describe("runDistill", () => {
       keywords: ["k"],
       outcome: "partial",
     };
-    const runner = (async () => digest) as RunnerFn;
+    const cluster = {
+      tasks: [{ slug: "fresh-run-task", title: "t", rationale: "r", members: ["a"] }],
+      misc: [],
+    };
+    const runner = (async (opts: { prompt: string }) =>
+      opts.prompt.includes("grouping Claude Code sessions") ? cluster : digest) as RunnerFn;
     const code = await runDistill(
       { home, fresh: true, yes: true },
       { output: cap.out, input: forbiddenInput(), runner },
