@@ -1,5 +1,6 @@
 import { defineCommand } from "citty";
-import { hint } from "../ui/style.js";
+import { readLibrary } from "../core/library.js";
+import { hint, table } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 export default defineCommand({
@@ -10,7 +11,28 @@ export default defineCommand({
   args: { ...sharedArgs },
   run({ args }) {
     const { home } = resolvePaths(args);
-    console.log(`list: not implemented yet (would read ${home}/library)`);
+    const entries = readLibrary(home);
+
+    if (entries.length === 0) {
+      console.log("library is empty — nothing distilled yet.");
+      console.log(hint("cc-hindsight distill"));
+      return;
+    }
+
+    console.log(
+      table(
+        entries.map((e) => [
+          e.slug,
+          e.sources.title ?? "",
+          String(e.sources.members?.length ?? 0),
+          e.sources.confidence ?? "?",
+          (e.sources.authored_at ?? "").slice(0, 10),
+        ]),
+        { header: ["Slug", "Title", "Sessions", "Confidence", "Authored"] },
+      ),
+    );
+    console.log();
+    console.log(`${entries.length} librar${entries.length === 1 ? "y entry" : "y entries"}`);
     console.log(hint("cc-hindsight show <slug>"));
   },
 });

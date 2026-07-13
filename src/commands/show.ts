@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import { defineCommand } from "citty";
-import { hint } from "../ui/style.js";
+import { findEntry, parseOneshot } from "../core/library.js";
+import { bold, dim, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 export default defineCommand({
@@ -12,12 +14,40 @@ export default defineCommand({
     slug: {
       type: "positional",
       description: "Library entry slug",
-      required: false,
+      required: true,
     },
   },
   run({ args }) {
     const { home } = resolvePaths(args);
-    console.log(`show: not implemented yet (would read ${home}/library)`);
-    console.log(hint("cc-hindsight copy <slug>"));
+    const slug = String(args.slug);
+    const entry = findEntry(home, slug);
+    if (!entry) {
+      console.error(`no library entry "${slug}" — try \`cc-hindsight list\`.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    let content: string;
+    try {
+      content = fs.readFileSync(entry.oneshotPath, "utf8");
+    } catch {
+      console.error(`entry "${slug}" has no oneshot file (${entry.oneshotPath}).`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const { title, body } = parseOneshot(content);
+    const s = entry.sources;
+    console.log(bold(`# ${title ?? s.title ?? slug}`));
+    console.log(
+      dim(
+        `${s.members?.length ?? 0} session(s) · ${s.outcome_summary ?? "?"} · ` +
+          `confidence ${s.confidence ?? "?"} · authored ${(s.authored_at ?? "").slice(0, 10)}`,
+      ),
+    );
+    console.log();
+    console.log(body);
+    console.log();
+    console.log(hint(`cc-hindsight copy ${slug}`));
   },
 });
