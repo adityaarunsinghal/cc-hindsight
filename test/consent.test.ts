@@ -14,6 +14,7 @@ import type { RunnerFn } from "../src/distill/pipeline.js";
 
 // --- helpers ---------------------------------------------------------------
 
+/** Captured text is ANSI-stripped: this file pins the §5.7 copy, not the color. */
 function captureOutput(): { out: Writable; text: () => string } {
   const chunks: string[] = [];
   const out = new Writable({
@@ -22,7 +23,7 @@ function captureOutput(): { out: Writable; text: () => string } {
       cb();
     },
   });
-  return { out, text: () => chunks.join("") };
+  return { out, text: () => chunks.join("").replace(/\u001b\[[0-9;]*m/g, "") };
 }
 
 function inputWith(line: string): Readable {
@@ -42,6 +43,9 @@ function forbiddenInput(): Readable {
 
 // --- renderPlan (exact §5.7 copy) ------------------------------------------
 
+/** The copy is the contract; color is presentation. Strip ANSI, pin the bytes. */
+const strip = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "");
+
 describe("renderPlan", () => {
   it("matches the exact §5.7 disclosure block (right-aligned counts)", () => {
     const expected = [
@@ -51,23 +55,25 @@ describe("renderPlan", () => {
       "    • ~5 oneshot authoring calls (one per task; exact count known after clustering)",
       "  ≈ 20 invocations total. Nothing is sent anywhere except through your own claude CLI.",
     ].join("\n");
-    expect(renderPlan({ digests: 14, cluster: 1, authorEstimate: 5 })).toBe(expected);
+    expect(strip(renderPlan({ digests: 14, cluster: 1, authorEstimate: 5 }))).toBe(expected);
   });
 
   it("appends a resume note line when checkpoints exist", () => {
-    const out = renderPlan({
-      digests: 14,
-      cluster: 1,
-      authorEstimate: 5,
-      resumeNote: "9 of 14 digests already done; will run 5 + 1 + ~5",
-    });
+    const out = strip(
+      renderPlan({
+        digests: 14,
+        cluster: 1,
+        authorEstimate: 5,
+        resumeNote: "9 of 14 digests already done; will run 5 + 1 + ~5",
+      }),
+    );
     expect(out).toContain("  9 of 14 digests already done; will run 5 + 1 + ~5");
     // resume note is the last line
     expect(out.split("\n").at(-1)).toBe("  9 of 14 digests already done; will run 5 + 1 + ~5");
   });
 
   it("keeps single-digit counts aligned to the widest field", () => {
-    const out = renderPlan({ digests: 5, cluster: 1, authorEstimate: 5 });
+    const out = strip(renderPlan({ digests: 5, cluster: 1, authorEstimate: 5 }));
     const lines = out.split("\n");
     expect(lines[1]).toBe("    •  5 session digests");
     expect(lines[2]).toBe("    •  1 clustering call");

@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { bold, cyan, dim, yellow } from "../ui/style.js";
 
 /**
  * The consent & cost gate (§5.7).
@@ -53,16 +54,17 @@ export function renderPlan(plan: DistillPlan): string {
   const width = Math.max(digestStr.length, clusterStr.length, authorStr.length);
 
   const total = plan.digests + plan.cluster + plan.authorEstimate;
+  const count = (s: string) => bold(cyan(s.padStart(width)));
 
   const lines = [
     "  distill will invoke your local `claude` CLI (your subscription/credits):",
-    `    • ${digestStr.padStart(width)} session digests`,
-    `    • ${clusterStr.padStart(width)} clustering call`,
-    `    • ${authorStr.padStart(width)} oneshot authoring calls (one per task; exact count known after clustering)`,
-    `  ≈ ${total} invocations total. Nothing is sent anywhere except through your own claude CLI.`,
+    `    ${dim("•")} ${count(digestStr)} session digests`,
+    `    ${dim("•")} ${count(clusterStr)} clustering call`,
+    `    ${dim("•")} ${count(authorStr)} oneshot authoring calls (one per task; exact count known after clustering)`,
+    `  ≈ ${bold(cyan(String(total)))} invocations total.${dim(" Nothing is sent anywhere except through your own claude CLI.")}`,
   ];
   if (plan.resumeNote) {
-    lines.push(`  ${plan.resumeNote}`);
+    lines.push(`  ${yellow(plan.resumeNote)}`);
   }
   return lines.join("\n");
 }

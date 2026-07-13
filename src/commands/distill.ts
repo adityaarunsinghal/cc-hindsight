@@ -19,7 +19,7 @@ import {
   runClusterStage,
   runDigestStage,
 } from "../distill/pipeline.js";
-import { hint } from "../ui/style.js";
+import { bold, cyan, dim, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 /** One entry of `exports/manifest.json` (§5.3). */
@@ -191,12 +191,14 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   if (decision === "dry-run") {
     write();
-    write(`digest — ${plan.eligible.length} session(s):`);
+    write(`${bold("digest")} — ${plan.eligible.length} session(s):`);
     for (const e of plan.eligible) {
-      write(`  • ${e.export} (${e.messages} msgs)`);
+      write(`  ${dim("•")} ${cyan(e.export)} ${dim(`(${e.messages} msgs)`)}`);
     }
-    write(`cluster — ${plan.cluster} call${noGroup ? " (skipped: --no-group)" : ""}.`);
-    write(`author  — ~${plan.authorEstimate} task(s) (exact count known after clustering).`);
+    write(`${bold("cluster")} — ${plan.cluster} call${noGroup ? " (skipped: --no-group)" : ""}.`);
+    write(
+      `${bold("author")}  — ~${plan.authorEstimate} task(s) (exact count known after clustering).`,
+    );
     return 0;
   }
 
