@@ -75,9 +75,11 @@ product:
 - **Local-only.** Everything is read from your disk and written to your disk
   (`~/.cc-hindsight`). No server, no accounts, no telemetry — and no network
   calls, ever, except your own `claude` CLI doing what it already does.
-- **Two runtime dependencies.** [`citty`](https://github.com/unjs/citty)
-  (itself zero-dependency) and [`zod`](https://zod.dev). The whole data path is
-  small enough to audit in one sitting.
+- **Three runtime dependencies.** [`citty`](https://github.com/unjs/citty)
+  (zero-dependency CLI framework), [`zod`](https://zod.dev) (schema
+  validation), and [`@clack/prompts`](https://github.com/bombshell-dev/clack)
+  (progress spinners — two micro-packages under the hood). The whole data
+  path is small enough to audit in one sitting.
 - **Consent-gated LLM use.** `distill` states the exact invocation count and
   waits for `[y/N]` before anything runs on your subscription/credits.
   `--dry-run` shows the full plan for free. Declining is exit code 2, never a

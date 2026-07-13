@@ -22,8 +22,9 @@ macOS; all of it must stay green.
 
 ## Ground rules
 
-- **Two runtime dependencies** (`citty`, `zod`) — PRs adding a third will be
-  declined; hand-roll it or leave it out.
+- **Three runtime dependencies** (`citty`, `zod`, `@clack/prompts`) — keep the
+  tree auditable in one sitting. A new dependency needs to clearly reduce code
+  or pay for itself in UX; when in doubt, hand-roll it or leave it out.
 - **Tests never read `~/.claude` or write outside temp dirs.** Every test runs
   against synthetic fixtures under `test/fixtures/`.
 - **No LLM calls outside `distill` / `preferences --consolidate`**, and never

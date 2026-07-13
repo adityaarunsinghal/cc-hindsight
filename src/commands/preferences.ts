@@ -9,6 +9,7 @@ import {
   renderClaudeMdBlock,
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
+import { withSpinner } from "../ui/progress.js";
 import { cyan, dim, green, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -92,11 +93,13 @@ export async function runPreferences(
   const runner: RunnerFn = deps.runner ?? runClaude;
   let consolidated: Consolidated;
   try {
-    consolidated = await runner({
-      prompt: buildConsolidatePrompt(prefs),
-      schema: ConsolidateSchema,
-      model: args.model,
-    });
+    consolidated = await withSpinner(out, `consolidating ${prefs.length} preference(s)`, () =>
+      runner({
+        prompt: buildConsolidatePrompt(prefs),
+        schema: ConsolidateSchema,
+        model: args.model,
+      }),
+    );
   } catch (err) {
     // Real-world case: the account's default model can be rejected by policy
     // (e.g. Bedrock data-retention 400s) — fail with the reason, not a stack,

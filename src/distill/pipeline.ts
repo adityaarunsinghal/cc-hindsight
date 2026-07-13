@@ -22,6 +22,7 @@ import {
 import type { ManifestEntry } from "../commands/distill.js";
 import type { AnaphoraRecord } from "../core/anaphora.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
+import { withSpinner } from "../ui/progress.js";
 
 /**
  * distill/pipeline.ts — stage orchestration, checkpoints, generations (F9).
@@ -183,15 +184,17 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
 
     write(`  ${label} — digesting…`);
     try {
-      const digest = await runner({
-        prompt: buildDigestPrompt({
-          exportName: entry.export,
-          content,
-          outcome: outcomes[entry.export],
+      const digest = await withSpinner(out, `${label} — digesting`, () =>
+        runner({
+          prompt: buildDigestPrompt({
+            exportName: entry.export,
+            content,
+            outcome: outcomes[entry.export],
+          }),
+          schema: DigestSchema,
+          model: opts.model,
         }),
-        schema: DigestSchema,
-        model: opts.model,
-      });
+      );
       checkpoint.digests[entry.export] = digest;
       saveDigests(opts.home, checkpoint); // after each — Ctrl-C safe
       completed++;
@@ -420,7 +423,9 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     write(`  clustering ${inputIds.length} digest(s)…`);
     const basePrompt = buildClusterPrompt(opts.digests);
     cluster = canonicalizeClusterIds(
-      await runner({ prompt: basePrompt, schema: ClusterSchema, model: opts.model }),
+      await withSpinner(out, `clustering ${inputIds.length} digest(s)`, () =>
+        runner({ prompt: basePrompt, schema: ClusterSchema, model: opts.model }),
+      ),
       inputIds,
     );
 
@@ -433,7 +438,9 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
         "Produce a corrected grouping that fixes every problem. Remember: every id in at " +
         "least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.";
       cluster = canonicalizeClusterIds(
-        await runner({ prompt: corrective, schema: ClusterSchema, model: opts.model }),
+        await withSpinner(out, "retrying with corrections", () =>
+          runner({ prompt: corrective, schema: ClusterSchema, model: opts.model }),
+        ),
         inputIds,
       );
       problems = validateCluster(cluster, inputIds);
@@ -624,11 +631,13 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
 
     write(`  ${label} — authoring…`);
     try {
-      const authored = await runner({
-        prompt: buildAuthorPrompt({ task, members }),
-        schema: AuthorSchema,
-        model: opts.model,
-      });
+      const authored = await withSpinner(out, `${label} — authoring`, () =>
+        runner({
+          prompt: buildAuthorPrompt({ task, members }),
+          schema: AuthorSchema,
+          model: opts.model,
+        }),
+      );
 
       // Our code writes the files; the TASK slug is authoritative for paths.
       const sources: SourcesJson = {
