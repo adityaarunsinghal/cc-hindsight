@@ -35,11 +35,30 @@ export const ClusterSchema = z.object({
 export type Cluster = z.infer<typeof ClusterSchema>;
 export type ClusterTask = Cluster["tasks"][number];
 
+/**
+ * Semantic floor for an authored oneshot body, in characters.
+ *
+ * A plain `z.string()` accepts degenerate bodies — a model can return
+ * `"placeholder"` in otherwise schema-perfect JSON (observed in the wild),
+ * which sails past validation, skips the corrective retry, and writes a junk
+ * library entry. The floor rides into the derived JSON Schema as `minLength`
+ * (so the CLI/model see the constraint up front) and is re-checked by zod on
+ * our side, where a violation triggers the standard one corrective retry.
+ * 120 chars is far below any real prompt (the tersest useful oneshot runs
+ * ~350+) and far above any stub.
+ */
+export const MIN_ONESHOT_CHARS = 120;
+
 /** Stage 3 — author: one realistic oneshot + observed preferences per task. */
 export const AuthorSchema = z.object({
   slug: z.string(),
   title: z.string(),
-  oneshot_markdown: z.string(),
+  oneshot_markdown: z
+    .string()
+    .min(
+      MIN_ONESHOT_CHARS,
+      `oneshot_markdown must be the full realistic prompt (at least ${MIN_ONESHOT_CHARS} characters), not a stub or placeholder`,
+    ),
   confidence: z.enum(["high", "medium", "low"]),
   preferences: z.array(
     z.object({

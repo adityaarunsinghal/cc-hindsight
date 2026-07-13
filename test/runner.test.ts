@@ -9,7 +9,7 @@ import {
   runClaude,
   type SpawnResult,
 } from "../src/claude/runner.js";
-import { DigestSchema } from "../src/claude/schemas.js";
+import { AuthorSchema, DigestSchema } from "../src/claude/schemas.js";
 
 // --- fixtures --------------------------------------------------------------
 
@@ -19,6 +19,17 @@ const VALID_DIGEST = {
   domain: "backend",
   keywords: ["api", "pagination"],
   outcome: "completed" as const,
+};
+
+const VALID_AUTHOR = {
+  slug: "users-pagination-work",
+  title: "Paginate the users endpoint",
+  oneshot_markdown:
+    "Add pagination to the /users API endpoint: limit/offset params on the query " +
+    "layer, page/pageSize on the route, and pagination metadata in the response. " +
+    "Keep the diff small, match the existing handler style, and write tests first.",
+  confidence: "high" as const,
+  preferences: [],
 };
 
 const CAPS_MODERN: Capabilities = { jsonSchema: true, disableTools: "tools-empty" };
@@ -115,6 +126,22 @@ describe("runClaude — retry", () => {
     expect(calls).toHaveLength(2);
     // the corrective note is appended on the second attempt only
     expect(calls[0]?.input).not.toContain("previous response could not be used");
+    expect(calls[1]?.input).toContain("previous response could not be used");
+  });
+
+  it("rejects a stub oneshot body (schema-valid JSON, semantic junk) and recovers on retry", async () => {
+    // Incident replay: the author stage once received {"oneshot_markdown":
+    // "placeholder"} — perfectly-shaped JSON that a plain string field accepts.
+    // The minimum-body floor makes it a validation failure, so the standard
+    // corrective retry fires instead of a junk entry being written.
+    const stub = { ...VALID_AUTHOR, oneshot_markdown: "placeholder" };
+    const { io, calls } = mockIo([envelope(stub), envelope(VALID_AUTHOR)]);
+    const out = await runClaude(
+      { prompt: "author it", schema: AuthorSchema, capabilities: CAPS_MODERN },
+      io,
+    );
+    expect(out).toEqual(VALID_AUTHOR);
+    expect(calls).toHaveLength(2);
     expect(calls[1]?.input).toContain("previous response could not be used");
   });
 

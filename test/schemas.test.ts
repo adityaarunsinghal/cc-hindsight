@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AuthorSchema, ClusterSchema, DigestSchema, toJsonSchema } from "../src/claude/schemas.js";
+import {
+  AuthorSchema,
+  ClusterSchema,
+  DigestSchema,
+  MIN_ONESHOT_CHARS,
+  toJsonSchema,
+} from "../src/claude/schemas.js";
 
 describe("DigestSchema", () => {
   it("accepts a valid digest", () => {
@@ -37,15 +43,37 @@ describe("ClusterSchema", () => {
 });
 
 describe("AuthorSchema", () => {
+  const REAL_BODY =
+    "I need a reusable script that processes my weekly export files: read every " +
+    "CSV in the input directory, validate headers, merge them into one dataset, " +
+    "and write a summary table. Be terse, pin dependency versions, and show me " +
+    "the plan before writing anything.";
+
   it("accepts a oneshot with preferences", () => {
     const a = {
       slug: "s",
       title: "t",
-      oneshot_markdown: "# do the thing",
+      oneshot_markdown: REAL_BODY,
       confidence: "high" as const,
       preferences: [{ text: "be terse", evidence: "session 3" }],
     };
     expect(AuthorSchema.parse(a)).toEqual(a);
+  });
+
+  it("rejects a stub/placeholder body so the corrective retry fires", () => {
+    // Observed in the wild: schema-perfect JSON with a one-word body. A plain
+    // string field would accept it and write a junk library entry.
+    for (const stub of ["placeholder", "TODO", "", "# Title only"]) {
+      const r = AuthorSchema.safeParse({
+        slug: "s",
+        title: "t",
+        oneshot_markdown: stub,
+        confidence: "high",
+        preferences: [],
+      });
+      expect(r.success).toBe(false);
+    }
+    expect(MIN_ONESHOT_CHARS).toBeGreaterThanOrEqual(50);
   });
 });
 
@@ -63,6 +91,14 @@ describe("toJsonSchema", () => {
   it("derives object schemas for cluster and author too", () => {
     expect(toJsonSchema(ClusterSchema).type).toBe("object");
     expect(toJsonSchema(AuthorSchema).type).toBe("object");
+  });
+
+  it("carries the oneshot minimum-body floor into the wire schema as minLength", () => {
+    // The constraint must reach the CLI/model via --json-schema, not live only
+    // in our re-validation — the model is told up front that stubs are invalid.
+    const js = toJsonSchema(AuthorSchema);
+    const props = js.properties as Record<string, { minLength?: number }>;
+    expect(props.oneshot_markdown?.minLength).toBe(MIN_ONESHOT_CHARS);
   });
 
   it("emits draft-7-compatible schemas with no $schema key (real claude CLI compat)", () => {

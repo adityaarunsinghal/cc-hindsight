@@ -24,7 +24,7 @@ describe("cc-hindsight root command", () => {
   it("has the right name and version", () => {
     const meta = main.meta as { name: string; version: string };
     expect(meta.name).toBe("cc-hindsight");
-    expect(meta.version).toBe("0.1.1");
+    expect(meta.version).toBe("0.1.2");
   });
 
   it("registers all 8 subcommands", () => {

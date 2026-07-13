@@ -16,9 +16,10 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * (or the task was blocked / cut upstream).
  *
  * The contract encoded below is pinned by the prompt-contract tests in
- * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change.
+ * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change
+ * (including changes to the response schema the model is held to).
  */
-export const AUTHOR_PROMPT_VERSION = 1;
+export const AUTHOR_PROMPT_VERSION = 2;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
