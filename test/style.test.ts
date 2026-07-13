@@ -32,6 +32,36 @@ describe("table()", () => {
   it("returns empty string for no rows", () => {
     expect(table([])).toBe("");
   });
+
+  it("caps the table at maxWidth by shrinking the widest columns with an ellipsis", () => {
+    const out = table(
+      [
+        ["slug-one", "a very long title that dominates the table by far", "ok"],
+        ["slug-two", "short", "ok"],
+      ],
+      { header: ["Slug", "Title", "St"], maxWidth: 40 },
+    );
+    for (const line of stripVTControlCharacters(out).split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    // Only the dominating column was cut; narrow columns survive whole.
+    expect(stripVTControlCharacters(out)).toContain("slug-one");
+    expect(stripVTControlCharacters(out)).toContain("…");
+  });
+
+  it("truncates styled cells ANSI-safely (reset appended, visible width exact)", () => {
+    const styled = `\u001b[36m${"x".repeat(30)}\u001b[39m`;
+    const out = table([[styled, "b"]], { maxWidth: 20 });
+    const firstCell = out.split("  ")[0] ?? "";
+    expect(stripVTControlCharacters(firstCell).length).toBeLessThanOrEqual(18);
+    expect(stripVTControlCharacters(firstCell).endsWith("…")).toBe(true);
+    expect(firstCell.endsWith("\u001b[0m")).toBe(true); // style can't bleed past the cut
+  });
+
+  it("does not cap when maxWidth is absent and stdout is not a TTY (pipes keep full content)", () => {
+    const wide = "w".repeat(500);
+    expect(table([[wide]])).toBe(wide);
+  });
 });
 
 describe("hint()", () => {
