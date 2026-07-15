@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { runMain } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import pkg from "../package.json" with { type: "json" };
 import { main } from "../src/main.js";
 import { epipeHandler } from "../src/ui/epipe.js";
 
@@ -21,10 +22,13 @@ const EXPECTED = [
 ];
 
 describe("cc-hindsight root command", () => {
-  it("has the right name and version", () => {
+  it("has the right name and reports the package version", () => {
     const meta = main.meta as { name: string; version: string };
     expect(meta.name).toBe("cc-hindsight");
-    expect(meta.version).toBe("0.1.3");
+    // Read from package.json so a version bump can never silently drift this
+    // assertion (the CLI's contract is "report the package version", not a
+    // hardcoded literal).
+    expect(meta.version).toBe(pkg.version);
   });
 
   it("registers all 8 subcommands", () => {

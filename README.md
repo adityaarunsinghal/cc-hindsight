@@ -2,6 +2,16 @@
 
 > **The prompt you'd write if you knew then what you know now.**
 
+[![npm](https://img.shields.io/npm/v/cc-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/cc-hindsight)
+[![CI](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/cc-hindsight?logo=node.js&color=339933)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/cc-hindsight?color=blue)](LICENSE)
+[![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
+
+<!-- DEMO: drop the asciinema/GIF here (Adi records it last). Suggested capture:
+     npx cc-hindsight → distill --dry-run (the consent plan) → distill (watch the
+     library build) → show <slug>. Record against a synthetic ~/.claude fixture. -->
+
 ```bash
 npx cc-hindsight
 ```
@@ -44,6 +54,16 @@ it — actually went):
 The second prompt was knowable at t=0. You just hadn't written it yet.
 
 ## Quickstart
+
+One command builds the whole library and shows it to you when it's done:
+
+```bash
+npx cc-hindsight distill    # offers to export first, then digest → cluster →
+                            # author (asks before any claude call), then shows
+                            # you the finished library
+```
+
+Prefer to drive each stage yourself? The pipeline is just three verbs:
 
 ```bash
 npx cc-hindsight            # 1. scan — inventory your projects (read-only)
@@ -160,8 +180,8 @@ API credits. The consent prompt states the exact invocation count up front
 interrupted run isn't wasted money. Sessions too large for the input budget
 (default 400k chars, `--input-budget`) are **refused before anything is
 spent** — re-run with `--truncate=extreme` to cut them (recorded in
-provenance) or narrow the scope. Digests run 3 at a time by default
-(`--concurrency`).
+provenance) or narrow the scope. Digest and author calls run 3 at a time by
+default (`--concurrency`; `1` = sequential).
 
 **Subscription or API?**
 Either. cc-hindsight shells out to `claude -p`; however your CLI is
@@ -208,3 +228,9 @@ fixture when you hit a transcript shape we don't handle.
 ## License
 
 [MIT](LICENSE)
+
+## Author
+
+Built by [Aditya Singhal](https://adityasinghal.com). If cc-hindsight surfaces
+a pattern you didn't know you had, [I'd love to hear about
+it](https://github.com/adityaarunsinghal/cc-hindsight/issues).
