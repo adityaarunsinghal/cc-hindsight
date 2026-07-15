@@ -8,9 +8,9 @@
 [![license](https://img.shields.io/npm/l/cc-hindsight?color=blue)](LICENSE)
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
-<!-- DEMO: drop the asciinema/GIF here (Adi records it last). Suggested capture:
-     npx cc-hindsight → distill --dry-run (the consent plan) → distill (watch the
-     library build) → show <slug>. Record against a synthetic ~/.claude fixture. -->
+<p align="center">
+  <img src=".github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from Claude Code session history" width="800">
+</p>
 
 ```bash
 npx cc-hindsight
