@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/v/cc-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/cc-hindsight)
 [![CI](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/cc-hindsight?logo=node.js&color=339933)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/cc-hindsight?color=blue)](LICENSE)
+[![license](https://img.shields.io/github/license/adityaarunsinghal/cc-hindsight?color=blue)](LICENSE)
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
 <p align="center">
