@@ -1,8 +1,8 @@
 # Contributing to cc-hindsight
 
-Thanks for helping. The bar for this codebase is simple: small enough to audit
-in one sitting, honest about what it extracts, and tests that never touch
-anyone's real data.
+Thanks for helping. This codebase keeps a compact dependency tree, documents
+what its extraction keeps and drops, and runs its tests only against synthetic
+fixtures.
 
 ## Setup
 
@@ -16,15 +16,15 @@ npm run build            # tsdown → dist/
 node dist/cli.js --help
 ```
 
-Node ≥ 22 is required (we use `util.styleText` and `util.parseArgs` via citty).
+Node ≥ 22 is required (cc-hindsight uses `util.styleText` and `util.parseArgs` via citty).
 CI runs biome → typecheck → tests → build → a packed-file-list assertion
 (`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
-Supported platforms are macOS and Linux — Windows code paths exist but are
+Supported platforms are macOS and Linux; Windows code paths exist but are
 untested.
 
 ## Ground rules
 
-- **Three runtime dependencies** (`citty`, `zod`, `@clack/prompts`) — keep the
+- **Three runtime dependencies** (`citty`, `zod`, `@clack/prompts`): keep the
   tree auditable in one sitting. A new dependency needs to clearly reduce code
   or pay for itself in UX; when in doubt, hand-roll it or leave it out.
 - **Tests never read `~/.claude` or write outside temp dirs.** Every test runs
@@ -48,7 +48,7 @@ Claude Code's JSONL format drifts. If you hit a session that exports wrongly
 (human text dropped, machine text admitted), here's the drill:
 
 1. **Find the offending line(s)** in the source file under
-   `~/.claude/projects/…/*.jsonl`. Run `cc-hindsight export --verbose` — every
+   `~/.claude/projects/…/*.jsonl`. Run `cc-hindsight export --verbose`; every
    dropped piece is logged with its rule and a snippet.
 2. **Synthesize a minimal fixture.** Copy the *shape*, not your data: replace
    every string with something generic ("do the thing", "/tmp/x.ts"). One JSON
@@ -57,8 +57,8 @@ Claude Code's JSONL format drifts. If you hit a session that exports wrongly
 3. **Write the failing test** in `test/extract.test.ts` asserting exactly what
    should come out (messages in order, drops recorded).
 4. **Fix the rule** in `src/core/extract.ts`, keeping the rule comment accurate.
-5. If you can't fix it, file the issue with the fixture attached — a shape
-   report with a synthetic fixture is the most valuable bug report we get.
+5. If you can't fix it, file the issue with the fixture attached. A shape
+   report with a synthetic fixture is a valuable kind of bug report.
 
 The same pattern applies to discovery (`test/fixtures/claude-home/`), export
 dedupe (`test/fixtures/export-home/`), and anaphora
@@ -68,7 +68,7 @@ dedupe (`test/fixtures/export-home/`), and anaphora
 
 The distill prompts live in `src/claude/prompts/`. The author prompt's realism
 contract (the t=0 test, the effort budget, never-copy-AI-prose) is pinned by
-`test/author.test.ts` — if you change the prompt, update the contract tests
+`test/author.test.ts`. If you change the prompt, update the contract tests
 deliberately in the same PR and bump the stage's `*_PROMPT_VERSION` constant so
 provenance in `sources.json` stays honest.
 
@@ -77,10 +77,10 @@ provenance in `sources.json` stays honest.
 ```bash
 npm test && npm run lint && npm run typecheck && npm run build
 npm pack --dry-run --json > pack.json
-node scripts/check-pack.mjs pack.json   # dist/, package.json, npm-shrinkwrap.json, README, LICENSE — nothing else
+node scripts/check-pack.mjs pack.json   # dist/, package.json, npm-shrinkwrap.json, README, LICENSE; nothing else
 ```
 
 Runtime dependencies are exact-pinned and the transitive tree ships via
-`npm-shrinkwrap.json` — after any dependency change, re-run `npm shrinkwrap`
+`npm-shrinkwrap.json`; after any dependency change, re-run `npm shrinkwrap`
 and commit the result. CI actions are SHA-pinned; bump the SHA and the tag
 comment together.

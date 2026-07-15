@@ -1,19 +1,19 @@
 name: Extraction fidelity report
-description: The exporter dropped genuine human input, or admitted machine text. The most valuable report we get.
+description: The exporter dropped genuine human input, or admitted machine text.
 labels: ["extraction-fidelity"]
 body:
   - type: markdown
     attributes:
       value: |
         Extraction is a fidelity contract (rules R1–R11). If `export` dropped
-        something you actually typed — or let machine-injected text through —
-        we want a fixture-grade report. Run with `--verbose` first: every
+        something you actually typed, or let machine-injected text through, a
+        fixture-grade report helps a lot. Run with `--verbose` first: every
         dropped piece is logged with the rule that dropped it.
   - type: input
     id: version
     attributes:
       label: cc-hindsight version + Claude Code version
-      placeholder: cc-hindsight 0.1.1 / claude 2.1.207
+      placeholder: cc-hindsight 1.0.0 / claude 2.1.210
     validations:
       required: true
   - type: dropdown
@@ -37,8 +37,8 @@ body:
       label: Synthetic fixture reproducing the shape
       description: |
         The JSONL entry (or minimal sequence) with every real string replaced by
-        a placeholder — keep the *structure* (field names, nesting, types)
-        exactly as your transcript has it. This is what lets us pin the shape
+        a placeholder. Keep the *structure* (field names, nesting, types)
+        exactly as your transcript has it. That is what pins the shape
         in a regression test. See CONTRIBUTING.md → "Adding a fixture".
       render: json
     validations:
@@ -54,5 +54,5 @@ body:
     attributes:
       label: Privacy check
       options:
-        - label: I confirm the fixture above is synthetic — no real prompts, paths, names, or keys.
+        - label: I confirm the fixture above is synthetic, with no real prompts, paths, names, or keys.
           required: true

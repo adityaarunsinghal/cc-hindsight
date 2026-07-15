@@ -1,5 +1,5 @@
 name: Bug report
-description: Something broke — a crash, wrong output, a command misbehaving.
+description: Something broke, such as a crash, wrong output, or a command misbehaving.
 labels: ["bug"]
 body:
   - type: input
@@ -14,7 +14,7 @@ body:
     attributes:
       label: Environment
       description: OS + Node version (`node --version`), and `claude --version` if distill is involved.
-      placeholder: macOS 15 / Node 22.22.0 / claude 2.1.207
+      placeholder: macOS 15 / Node 22.22.0 / claude 2.1.210
     validations:
       required: true
   - type: textarea
@@ -28,7 +28,7 @@ body:
     id: reproduce
     attributes:
       label: How to reproduce
-      description: Steps, flags, and — if relevant — a *synthetic* fixture (never paste real session content; replace strings with placeholders).
+      description: Steps, flags, and if relevant a *synthetic* fixture (please replace real session strings with placeholders).
   - type: checkboxes
     id: privacy
     attributes:
