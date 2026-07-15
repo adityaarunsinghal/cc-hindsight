@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-01-11T00:00:00.000Z","message":{"role":"user","content":"[Request interrupted by user]"}}
+{"type":"user","timestamp":"2026-01-11T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"},{"type":"text","text":"Stop and just show me the diff."}]}}

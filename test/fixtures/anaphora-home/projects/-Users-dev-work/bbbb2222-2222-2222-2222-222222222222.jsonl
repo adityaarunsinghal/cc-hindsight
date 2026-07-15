@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"bbbb2222-2222-2222-2222-222222222222","cwd":"/Users/dev/work","timestamp":"2026-05-02T09:00:00.000Z","message":{"role":"user","content":"Set up the database layer."}}
+{"type":"assistant","timestamp":"2026-05-02T09:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I have a question about the database."},{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","header":"DB","options":[{"label":"PostgreSQL"},{"label":"MySQL"},{"label":"SQLite"}],"multiSelect":false}]}}]}}
+{"type":"user","timestamp":"2026-05-02T09:01:00.000Z","message":{"role":"user","content":"option 2"}}
+{"type":"assistant","timestamp":"2026-05-02T09:01:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Using MySQL then."}]}}
+{"type":"user","timestamp":"2026-05-02T09:02:00.000Z","message":{"role":"user","content":"great thanks"}}

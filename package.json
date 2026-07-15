@@ -1,0 +1,56 @@
+{
+  "name": "cc-hindsight",
+  "version": "1.0.2",
+  "description": "Mine your Claude Code session history into a oneshot prompt library and CLAUDE.md preferences. The prompt you'd write if you knew then what you know now.",
+  "type": "module",
+  "author": "Aditya Singhal (https://adityasinghal.com)",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "prompt",
+    "prompt-library",
+    "prompt-engineering",
+    "cli",
+    "transcripts",
+    "local-first"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adityaarunsinghal/cc-hindsight.git"
+  },
+  "homepage": "https://github.com/adityaarunsinghal/cc-hindsight#readme",
+  "bugs": {
+    "url": "https://github.com/adityaarunsinghal/cc-hindsight/issues"
+  },
+  "bin": {
+    "cc-hindsight": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && npm pack --dry-run --json > pack.json && node scripts/check-pack.mjs pack.json && rm pack.json"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.7.0",
+    "citty": "0.2.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^22.20.1",
+    "tsdown": "^0.22.7",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

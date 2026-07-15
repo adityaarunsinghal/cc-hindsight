@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+*.tgz
+pack.json
+.DS_Store
+
+# Local-only working notes and session memory (never publish)
+log.md
+.remember/
+
+# Demo GIF workshop (local-only; the shipped GIF lives in .github/assets/)
+demo/
+
+# Launch copy drafts (local-only working dir; nothing here ships)
+launch/

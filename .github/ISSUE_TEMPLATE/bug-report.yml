@@ -1,0 +1,38 @@
+name: Bug report
+description: Something broke, such as a crash, wrong output, or a command misbehaving.
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: cc-hindsight version
+      description: "`npx cc-hindsight --version`"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS + Node version (`node --version`), and `claude --version` if distill is involved.
+      placeholder: macOS 15 / Node 22.22.0 / claude 2.1.210
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, what you got. Paste output where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Steps, flags, and if relevant a *synthetic* fixture (please replace real session strings with placeholders).
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I confirm any transcript snippets in this report are synthetic or scrubbed of real content.
+          required: true

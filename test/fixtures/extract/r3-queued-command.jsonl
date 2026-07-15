@@ -1,0 +1,3 @@
+{"type":"attachment","timestamp":"2026-01-07T00:00:00.000Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"commandMode":"prompt","text":"Run the tests again."}}
+{"type":"attachment","timestamp":"2026-01-07T00:00:01.000Z","attachment":{"type":"queued_command","origin":{"kind":"assistant"},"commandMode":"prompt","text":"machine-originated queue"}}
+{"type":"attachment","timestamp":"2026-01-07T00:00:02.000Z","attachment":{"type":"file","origin":{"kind":"human"},"text":"an attached file, not a typed prompt"}}

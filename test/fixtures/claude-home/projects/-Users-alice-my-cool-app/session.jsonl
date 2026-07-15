@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"c1","message":{"role":"user","content":"initialize the project"},"timestamp":"2026-07-09T08:00:00Z"}
+{"type":"assistant","message":{"role":"assistant","content":"Initialized."},"timestamp":"2026-07-09T08:00:12Z"}

@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-01-09T00:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). the user said: Use a migration instead of editing the schema directly."}]}}
+{"type":"user","timestamp":"2026-01-09T00:00:01.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"File written successfully to src/db.ts"}]}}

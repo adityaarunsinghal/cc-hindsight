@@ -1,0 +1,2 @@
+{"type":"user","cwd":"/Users/alice/projects/webapp","sessionId":"s2","message":{"role":"user","content":"fix the header alignment"},"timestamp":"2026-07-11T09:30:00Z"}
+{"type":"assistant","message":{"role":"assistant","content":"Done."},"timestamp":"2026-07-11T09:30:10Z"}

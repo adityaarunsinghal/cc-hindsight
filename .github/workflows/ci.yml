@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Actions are SHA-pinned (tag comments for humans): a moved tag cannot
+      # silently change what runs against the repo.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx biome ci .
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      - run: npm run build
+      # Package hygiene: the tarball must contain dist + the standard metadata
+      # files and NOTHING else (no src/, test/, fixtures, or config).
+      - run: npm pack --dry-run --json > pack.json
+      - run: node scripts/check-pack.mjs pack.json

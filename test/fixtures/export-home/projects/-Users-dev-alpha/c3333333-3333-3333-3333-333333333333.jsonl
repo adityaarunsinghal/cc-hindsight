@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"c3333333-3333-3333-3333-333333333333","cwd":"/Users/dev/alpha","timestamp":"2026-03-05T09:00:00.000Z","message":{"role":"user","content":"Quick one-off question about the build."}}
+{"type":"assistant","timestamp":"2026-03-05T09:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here you go."}]}}
