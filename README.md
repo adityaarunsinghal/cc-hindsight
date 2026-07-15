@@ -9,7 +9,7 @@
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
 <p align="center">
-  <img src=".github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from Claude Code session history" width="800">
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/cc-hindsight/main/.github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from Claude Code session history" width="800">
 </p>
 
 ```bash
