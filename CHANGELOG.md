@@ -4,6 +4,14 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-07-15
+
+### Fixed
+
+- The license badge in the README pointed at an npm registry endpoint that
+  intermittently rendered "package not found"; it now reads the license GitHub
+  detects, so it reliably shows MIT.
+
 ## [1.0.1] - 2026-07-15
 
 ### Added
@@ -47,5 +55,6 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[1.0.2]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.2
 [1.0.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.1
 [1.0.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.0
