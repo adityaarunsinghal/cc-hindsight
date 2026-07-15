@@ -11,3 +11,6 @@ log.md
 
 # Demo GIF workshop (local-only; the shipped GIF lives in .github/assets/)
 demo/
+
+# Launch copy drafts (local-only working dir; nothing here ships)
+launch/
