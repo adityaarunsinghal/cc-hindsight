@@ -19,19 +19,23 @@ npx cc-hindsight
 cc-hindsight mines your Claude Code session history into two things you can use
 tomorrow morning:
 
-1. **A oneshot prompt library** — for each real task you've done, the realistic
+1. **A oneshot prompt library.** For each real task you've done, the realistic
    ideal *first* prompt: everything you knew and wanted at t=0 but didn't say,
    written in your own voice.
-2. **A distilled preference set** — the things you keep re-telling your agent
+2. **A distilled preference set.** The things you keep re-telling your agent
    ("diagnose before acting", "pin the versions", "be terse"), surfaced as a
    paste-ready `CLAUDE.md` block so every future session starts aligned.
 
 ## The t=0 problem
 
-You get better results the more context you front-load into your first prompt —
-yet almost everyone under-specifies at t=0 and spends the session steering:
-correcting course, restating preferences, answering questions the agent
-shouldn't have had to ask.
+You get better results the more context you front-load into your first prompt,
+yet we underspecify at t=0 and spend the session steering: correcting course,
+restating preferences, answering questions the agent shouldn't have had to ask.
+
+And the cost repeats every session. Your working preferences are stable facts
+about how you like to work, yet you re-derive and re-type them project after
+project instead of stating them once, upfront, where every future session reads
+them from the first message.
 
 All the evidence of what you *should* have said is already on disk. Claude Code
 saves every session as JSONL under `~/.claude/projects/`. Plenty of tools read
@@ -40,16 +44,16 @@ back to better prompting.**
 
 **Before** (what you actually typed at t=0):
 
-> fix my CI
+> help me script blocking a device on my home router
 
-**After** (what cc-hindsight distills from how that session — and two more like
-it — actually went):
+**After** (what cc-hindsight distilled from how that session actually went):
 
-> Set up CI for this repo: lint, typecheck, tests, and build as separate steps.
-> Pin every action version — no floating tags. Node 22, npm cache on. If a step
-> is flaky, make it fail loudly rather than retry silently; I'd rather see it.
-> Keep the workflow file boring and readable. When you're unsure about my
-> setup, ask before assuming.
+> I want to automate my home router, starting with blocking a device. Get API
+> access working first, and store any credentials securely instead of asking me
+> to paste them in the clear. Anything that changes the network should be safe
+> by default: show me what it'll do and let me confirm before it runs. Then
+> prove it end-to-end on a real device. Research how others have done this
+> first, and keep the setup written down so I can reproduce it.
 
 The second prompt was knowable at t=0. You just hadn't written it yet.
 
@@ -66,18 +70,18 @@ npx cc-hindsight distill    # offers to export first, then digest → cluster �
 Prefer to drive each stage yourself? The pipeline is just three verbs:
 
 ```bash
-npx cc-hindsight            # 1. scan — inventory your projects (read-only)
-npx cc-hindsight export     # 2. export — human-only markdown per session
-npx cc-hindsight distill    # 3. distill — digest → cluster → author (asks first)
+npx cc-hindsight            # 1. scan: inventory your projects (read-only)
+npx cc-hindsight export     # 2. export: human-only markdown per session
+npx cc-hindsight distill    # 3. distill: digest → cluster → author (asks first)
 ```
 
-Then browse — and curate — the results:
+Then browse and curate the results:
 
 ```bash
 npx cc-hindsight list                # your library (✎ edited / ▲▼ rating badges)
 npx cc-hindsight show <slug>         # read a oneshot
 npx cc-hindsight copy <slug>         # → clipboard, paste into a fresh session
-npx cc-hindsight edit <slug>         # open in $EDITOR — your edits are protected
+npx cc-hindsight edit <slug>         # open in $EDITOR; your edits are protected
 npx cc-hindsight rate <slug> up      # record a verdict (up|down)
 npx cc-hindsight prune               # remove orphaned entries (asks first)
 npx cc-hindsight preferences         # → CLAUDE.md block
@@ -85,7 +89,7 @@ npx cc-hindsight status              # pipeline funnel + orphan/skip flags
 ```
 
 Requires Node ≥ 22 on macOS or Linux (Windows is untested and currently
-unsupported). `scan` and `export` are fully deterministic — no LLM, no
+unsupported). `scan` and `export` are fully deterministic: no LLM, no
 network. `distill` uses the `claude` CLI you already have, and never without
 asking.
 
@@ -95,20 +99,20 @@ For a tool that reads your entire conversation history, auditability is the
 product:
 
 - **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.cc-hindsight`). No server, no accounts, no telemetry — and no network
-  calls, ever, except your own `claude` CLI doing what it already does.
+  (`~/.cc-hindsight`). No server, no accounts, no telemetry. The only network
+  call is your own `claude` CLI doing what it already does.
 - **Three runtime dependencies.** [`citty`](https://github.com/unjs/citty)
   (zero-dependency CLI framework), [`zod`](https://zod.dev) (schema
   validation), and [`@clack/prompts`](https://github.com/bombshell-dev/clack)
-  (progress spinners — five micro-packages under the hood). All three are
+  (progress spinners, five micro-packages under the hood). All three are
   exact-pinned, and the entire transitive tree ships locked via
   `npm-shrinkwrap.json`. The whole data path is small enough to audit in one
   sitting.
 - **Consent-gated LLM use.** `distill` states the exact invocation count and
   waits for `[y/N]` before anything runs on your subscription/credits.
-  `--dry-run` shows the full plan for free. Declining is exit code 2, never a
-  partial run.
-- **Plain statement:** exports contain your raw prompts — including anything
+  `--dry-run` shows the full plan for free. If you decline, it exits without
+  invoking anything (exit code 2).
+- **Plain statement:** exports contain your raw prompts, including anything
   sensitive you ever pasted into a session (keys, internal names, that one
   angry message). They live in your home directory with your permissions, and
   nothing ships them anywhere. A `--redact` option is on the roadmap.
@@ -122,7 +126,7 @@ flowchart TD
     A -->|"anaphora + outcome evidence"| D["anaphora.json + outcomes.json"]
     C --> E
     D --> E
-    subgraph distill ["distill — opt-in, consent-gated, resumable"]
+    subgraph distill ["distill: opt-in, consent-gated, resumable"]
         E["digest: 1 claude call / session"] --> F["cluster: 1 call"]
         F --> G["author: 1 call / task"]
     end
@@ -136,15 +140,15 @@ counts as human input (attachments typed while the agent was busy, recovered
 slash commands, `[decision]` lines from option picks, `[image pasted]`
 markers), with a regression fixture per rule. Fork/resume duplicates are
 deduped globally. Short replies like "yes" and "option 2" get their antecedent
-attached so the author stage never guesses what you approved. Sessions carry an
-outcome classification — tasks where nothing ever succeeded are skipped, not
-distilled into confident prompts that reproduce failure paths.
+attached so the author stage knows what you approved. Sessions carry an
+outcome classification, so a task where nothing ever succeeded gets skipped
+instead of becoming a confident prompt that reproduces a failure path.
 
-Authored oneshots pass a **"knowable at t=0" test**: front-load intent,
-constraints, preferences, quality bars; never front-load facts you only
+Authored oneshots pass a **"knowable at t=0" test**: they front-load intent,
+constraints, preferences, and quality bars, while leaving out facts you only
 discovered mid-session (paths, root causes, error messages). And they respect
-an **effort budget** — the length a motivated human would actually type, not a
-700-word spec.
+an **effort budget**, staying around the length a motivated human would
+actually type rather than ballooning into a 700-word spec.
 
 Every distill stage checkpoints to disk after each unit of work: Ctrl-C loses
 nothing, re-running resumes, `--fresh` resets deliberately, and `status` flags
@@ -160,17 +164,17 @@ library entries orphaned by re-clustering.
 | cctrace / exporters | ✓ | markdown/XML exports | backward (archive) |
 | **cc-hindsight** | ✓ | **oneshot prompt library + CLAUDE.md preferences** | **forward (better next session)** |
 
-Closest kin is Simon Willison's `claude-code-transcripts` — same local-first
+Closest kin is Simon Willison's `claude-code-transcripts`: same local-first
 values, same belief that transcripts are undervalued artifacts. The difference
-is the direction of gaze: it renders your sessions (backward, for others); we
-distill them (forward, for you).
+is the direction of gaze: it renders your sessions (backward, for others);
+cc-hindsight distills them (forward, for you).
 
 ## FAQ
 
 **Does my data leave my machine?**
 No. The deterministic commands never touch the network. `distill` pipes
-content to your locally installed `claude` CLI — the same thing that happens
-when you use Claude Code — and nothing else.
+content to your locally installed `claude` CLI, the same thing that happens
+when you use Claude Code, and nothing else.
 
 **What does distill cost?**
 Whatever your `claude` CLI costs you: it runs on your existing subscription or
@@ -179,7 +183,7 @@ API credits. The consent prompt states the exact invocation count up front
 `--dry-run` prints the same plan without running anything. Checkpoints mean an
 interrupted run isn't wasted money. Sessions too large for the input budget
 (default 400k chars, `--input-budget`) are **refused before anything is
-spent** — re-run with `--truncate=extreme` to cut them (recorded in
+spent**. Re-run with `--truncate=extreme` to cut them (recorded in
 provenance) or narrow the scope. Digest and author calls run 3 at a time by
 default (`--concurrency`; `1` = sequential).
 
@@ -193,7 +197,7 @@ filters thin ones, and fork/resume copies are deduped into their original
 session. Note that dedupe is global across all projects: with `--project`, a
 message duplicated by fork/resume is attributed to its earliest session even
 when that session is outside the filter. Run `export --verbose` to see every
-dropped piece with a reason — and if genuine human input was dropped, that's a
+dropped piece with a reason. If genuine human input was dropped, that's a
 bug: file an extraction-fidelity report.
 
 **Can I regenerate everything from scratch?**
@@ -203,8 +207,8 @@ in `status`.
 
 ## Roadmap
 
-- Claude Code **plugin packaging** for existing marketplaces (distribution,
-  not a marketplace of our own)
+- Claude Code **plugin packaging** for existing marketplaces (for
+  distribution, without standing up a separate marketplace)
 - An in-session **skill variant** ("distill this session as we go")
 - **Agent SDK** orchestration exploration
 - **parentUuid-aware anaphora** (branch-correct antecedents on forked
@@ -216,14 +220,14 @@ in `status`.
 
 ```bash
 npm install
-npm test            # vitest — fixtures only, never reads your ~/.claude
+npm test            # vitest: fixtures only, never reads your ~/.claude
 npm run lint        # biome
 npm run typecheck   # tsc --noEmit
 npm run build       # tsdown → dist/
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) — especially the guide to adding a
-fixture when you hit a transcript shape we don't handle.
+See [CONTRIBUTING.md](CONTRIBUTING.md), especially the guide to adding a
+fixture when you hit an unhandled transcript shape.
 
 ## License
 
