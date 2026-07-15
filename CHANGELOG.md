@@ -4,6 +4,18 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-07-15
+
+### Added
+
+- A demo GIF at the top of the README showing a real run.
+- SECURITY policy, this changelog, a pull-request template, and an issue-template
+  config that routes questions to Discussions.
+
+### Changed
+
+- Documentation reads in a plainer voice throughout.
+
 ## [1.0.0] - 2026-07-15
 
 First public release.
@@ -35,4 +47,5 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[1.0.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.1
 [1.0.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.0
