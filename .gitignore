@@ -4,3 +4,7 @@ coverage
 *.tgz
 pack.json
 .DS_Store
+
+# Local-only working notes and session memory (never publish)
+log.md
+.remember/

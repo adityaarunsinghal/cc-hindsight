@@ -637,6 +637,8 @@ export interface AuthorStageOptions {
   timeoutMs?: number;
   /** Overwrite oneshots the user edited by hand (default: keep them). */
   force?: boolean;
+  /** Max author calls in flight at once (default 1 — sequential). */
+  concurrency?: number;
 }
 
 /** Read `exports/anaphora.json` ({export → records}); absent/invalid → {}. */
@@ -709,8 +711,10 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     failed: [],
   };
   const total = opts.tasks.length;
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1));
 
-  for (const [i, task] of opts.tasks.entries()) {
+  /** Author one task end-to-end (skip / resume / budget / call / write). */
+  const authorOne = async (task: ClusterTask, i: number): Promise<void> => {
     const label = `[${i + 1}/${total}] ${task.slug}`;
     const dir = path.join(opts.home, "library", task.slug);
     const sourcesPath = path.join(dir, "sources.json");
@@ -728,7 +732,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           `${summarizeOutcomes(task.members, opts.digests) || "none"})`,
       });
       write(`  ${label} — skipped (no completed/partial member session)`);
-      continue;
+      return;
     }
 
     // Resume: an existing sources.json counts as "done" only when it was
@@ -750,7 +754,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     ) {
       result.resumed.push(task.slug);
       write(`  ${label} — already authored (skipped)`);
-      continue;
+      return;
     }
 
     // Overwrite protection: if the user edited the oneshot since it
@@ -771,7 +775,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           reason: "oneshot was edited by hand — re-run with --force to overwrite",
         });
         write(`  ${label} — ✋ edited by hand; kept (re-run with --force to overwrite)`);
-        continue;
+        return;
       }
     }
 
@@ -795,7 +799,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         error: `member export unreadable: ${unreadableMember}`,
       });
       write(`  ${label} — ✗ member export unreadable: ${unreadableMember}`);
-      continue;
+      return;
     }
 
     // Input budget / overflow policy for the aggregate of all member content.
@@ -818,7 +822,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           `  ${label} — ⤬ blocked: ${totalChars} chars exceed the input budget (${budget}). ` +
             "Re-run with --truncate=extreme or a larger --input-budget.",
         );
-        continue; // pre-spend block
+        return; // pre-spend block
       }
       // extreme: give each member an equal slice of the budget, cut middle-out,
       // and record exactly what was dropped for provenance.
@@ -840,14 +844,18 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
 
     write(`  ${label} — authoring…`);
     try {
-      const authored = await withSpinner(out, `${label} — authoring`, () =>
+      const call = () =>
         runner({
           prompt: buildAuthorPrompt({ task, members }),
           schema: AuthorSchema,
           model: opts.model,
           timeoutMs: opts.timeoutMs,
-        }),
-      );
+        });
+      // A spinner is a single-line UI; with parallel calls in flight the lines
+      // would fight over the cursor — plain progress lines instead (mirrors the
+      // digest stage).
+      const authored =
+        concurrency === 1 ? await withSpinner(out, `${label} — authoring`, call) : await call();
 
       // Our code writes the files; the TASK slug is authoritative for paths.
       const sources: SourcesJson = {
@@ -892,9 +900,39 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       const message = err instanceof Error ? err.message : String(err);
       result.failed.push({ export: task.slug, error: message });
       write(`      ✗ failed: ${truncate(message, 120)}`);
-      // continue — one task's failure doesn't abort the rest
+      // one task's failure doesn't abort the rest
     }
-  }
+  };
+
+  // Bounded worker pool: N workers pull the next un-started task until none
+  // remain. concurrency=1 degrades to the exact sequential behavior. Each task
+  // writes its own library/<slug>/ dir and the runner is stateless per call, so
+  // parallel authoring is race-free; result.* pushes are synchronous (single JS
+  // tick) so concurrent workers never interleave a mutation.
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < opts.tasks.length) {
+      const i = nextIndex++;
+      const task = opts.tasks[i];
+      if (task) await authorOne(task, i);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, Math.max(total, 1)) }, () => worker()),
+  );
+
+  // Determinism: workers finish in nondeterministic order under concurrency > 1,
+  // so re-order every result list by the task's original position. The report
+  // (and any downstream consumer) then reads identically regardless of timing.
+  const order = new Map(opts.tasks.map((t, i) => [t.slug, i]));
+  const bySlug = (a: { slug: string }, b: { slug: string }) =>
+    (order.get(a.slug) ?? 0) - (order.get(b.slug) ?? 0);
+  const byExport = (a: { export: string }, b: { export: string }) =>
+    (order.get(a.export) ?? 0) - (order.get(b.export) ?? 0);
+  result.authored.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+  result.resumed.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+  result.skipped.sort(bySlug);
+  result.failed.sort(byExport);
 
   return result;
 }

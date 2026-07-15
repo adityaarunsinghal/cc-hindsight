@@ -597,4 +597,114 @@ describe("runDistill", () => {
     );
     expect(captured?.resumeNote).toBeUndefined();
   });
+
+  // --- seamless one-shot flow: offer export when none, offer library after ----
+  // A synthetic ~/.claude with real sessions so an offered export produces a
+  // genuine manifest and the whole pipeline can run against a stubbed runner.
+  const EXPORT_FIXTURE = path.join(import.meta.dirname, "fixtures", "export-home");
+
+  const stubRunner = (): RunnerFn =>
+    (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions")) {
+        // Echo the real export ids from the prompt so the clustering passes
+        // validation (every id must land in a task; empty members are rejected).
+        const members = [...opts.prompt.matchAll(/^- id: (.+)$/gm)].map((m) => m[1] as string);
+        return {
+          tasks: [{ slug: "one-shot-task", title: "t", rationale: "r", members }],
+          misc: [],
+        };
+      }
+      if (opts.prompt.includes("realistic ideal first prompt")) {
+        return {
+          slug: "one-shot-task",
+          title: "One Shot",
+          oneshot_markdown: "Do it well.",
+          confidence: "high",
+          preferences: [],
+        };
+      }
+      return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
+    }) as RunnerFn;
+
+  it("offers to export first when no manifest exists, then continues (interactive yes)", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(null); // NO manifest
+    const code = await runDistill(
+      { home, "claude-dir": EXPORT_FIXTURE },
+      // First prompt = the export offer (answer y); consent gate then declines
+      // on EOF after the single line is consumed.
+      { output: cap.out, input: inputWith("y\n"), runner: stubRunner() },
+    );
+    // The offer ran export → a manifest now exists on disk.
+    expect(fs.existsSync(path.join(home, "exports", "manifest.json"))).toBe(true);
+    expect(cap.text()).toMatch(/export/i);
+    // We consumed the one input line on the export offer; the real consent gate
+    // then hit EOF and declined — so the run reached the gate (exit 2), proving
+    // the flow continued past export rather than exiting 1 "nothing exported".
+    expect(code).toBe(2);
+  });
+
+  it("does NOT offer export when there is no way to prompt (piped, no --yes): exits 1 as before", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(null);
+    // No input stream injected and output is not a TTY → cannot prompt.
+    const code = await runDistill({ home, "claude-dir": EXPORT_FIXTURE }, { output: cap.out });
+    expect(code).toBe(1);
+    expect(cap.text()).toContain("nothing exported yet");
+    // Export must NOT have run silently.
+    expect(fs.existsSync(path.join(home, "exports", "manifest.json"))).toBe(false);
+  });
+
+  it("--yes runs export automatically when no manifest exists (true one-shot)", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(null);
+    const code = await runDistill(
+      { home, "claude-dir": EXPORT_FIXTURE, yes: true },
+      { output: cap.out, input: forbiddenInput(), runner: stubRunner() },
+    );
+    expect(code).toBe(0);
+    expect(fs.existsSync(path.join(home, "exports", "manifest.json"))).toBe(true);
+    // Ran clear through to a library entry.
+    expect(fs.existsSync(path.join(home, "library"))).toBe(true);
+  });
+
+  it("--dry-run with no manifest does NOT run export; explains and exits 1", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(null);
+    const code = await runDistill(
+      { home, "claude-dir": EXPORT_FIXTURE, "dry-run": true },
+      { output: cap.out, input: forbiddenInput() },
+    );
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(home, "exports", "manifest.json"))).toBe(false);
+    expect(cap.text()).toContain("export");
+  });
+
+  it("offers to show the library after authoring (interactive), printing the table", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild the thing\n");
+    // Two input lines: consent gate "y", then the show-library offer "y".
+    const code = await runDistill(
+      { home },
+      { output: cap.out, input: inputWith("y\ny\n"), runner: stubRunner() },
+    );
+    expect(code).toBe(0);
+    // The library table header proves the post-distill display fired.
+    expect(cap.text()).toContain("Confidence");
+    expect(cap.text()).toContain("one-shot-task");
+  });
+
+  it("--yes shows the library after authoring without prompting", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild the thing\n");
+    const code = await runDistill(
+      { home, yes: true },
+      { output: cap.out, input: forbiddenInput(), runner: stubRunner() },
+    );
+    expect(code).toBe(0);
+    expect(cap.text()).toContain("one-shot-task");
+    expect(cap.text()).toContain("Confidence");
+  });
 });

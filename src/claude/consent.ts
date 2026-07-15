@@ -91,6 +91,12 @@ export function renderPlan(plan: DistillPlan): string {
 }
 
 function ask(question: string, input: Readable, output: Writable): Promise<string> {
+  // An already-exhausted stream (e.g. a second prompt after `printf 'y\n' |`
+  // fed the first) will never deliver a fresh line, and a new readline
+  // interface over it won't emit its own `close` — the promise would hang
+  // forever. Treat a spent stream as EOF (empty input) up front; callers map
+  // that to the default answer. A live TTY reports readableEnded === false.
+  if (input.readableEnded) return Promise.resolve("");
   const rl = readline.createInterface({ input, output });
   return new Promise((resolve) => {
     let answered = false;
@@ -111,18 +117,23 @@ function ask(question: string, input: Readable, output: Writable): Promise<strin
 }
 
 /**
- * Generic `[y/N]` confirmation on injected streams (default No). Used for
- * secondary gates like `distill --fresh` (checkpoints are cleared only
- * after an explicit confirmation).
+ * Generic confirmation on injected streams. Default No (`[y/N]`) unless
+ * `defaultYes` is set (`[Y/n]`), in which case empty input / EOF means yes.
+ *
+ * The destructive `--fresh` gate uses the default-No form (an unattended EOF
+ * must never clear checkpoints). The seamless-flow offers (run export first?,
+ * show the library?) use `defaultYes` — they're local, free, and reversible, so
+ * the low-friction default serves the one-shot experience.
  */
 export async function askYesNo(
   question: string,
-  opts: { input?: Readable; output?: Writable } = {},
+  opts: { input?: Readable; output?: Writable; defaultYes?: boolean } = {},
 ): Promise<boolean> {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
-  const answer = await ask(`${question} [y/N] `, input, output);
+  const answer = await ask(`${question} ${opts.defaultYes ? "[Y/n]" : "[y/N]"} `, input, output);
   const norm = answer.trim().toLowerCase();
+  if (norm === "") return opts.defaultYes === true; // empty / EOF → the default
   return norm === "y" || norm === "yes";
 }
 

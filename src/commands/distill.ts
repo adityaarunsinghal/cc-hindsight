@@ -12,6 +12,7 @@ import {
 } from "../claude/consent.js";
 import type { Digest } from "../claude/schemas.js";
 import { resolveInputBudget, resolveTimeoutMs, resolveTruncatePolicy } from "../core/budget.js";
+import { readLibrary } from "../core/library.js";
 import {
   clearCheckpoints,
   loadDigests,
@@ -20,8 +21,10 @@ import {
   runClusterStage,
   runDigestStage,
 } from "../distill/pipeline.js";
-import { bold, cyan, dim, hint } from "../ui/style.js";
+import { renderLibraryTable } from "../ui/library-table.js";
+import { bold, cyan, dim, green, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
+import { type ExportArgs, runExport } from "./export.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
 // it; re-exported here because the distill plan is computed from it.
@@ -157,13 +160,52 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   const { home } = resolvePaths(args);
   const manifestPath = path.join(home, "exports", "manifest.json");
 
+  // We can prompt when there's a stream to prompt on: an injected input (tests)
+  // or a real interactive stdin. In a pipe/CI without --yes we deliberately do
+  // NOT prompt — behavior stays exactly as before (no surprise export, no
+  // library dump). --yes proceeds through every offer without reading stdin.
+  const canPrompt = deps.input !== undefined || process.stdin.isTTY === true;
+
   let raw: string;
   try {
     raw = fs.readFileSync(manifestPath, "utf8");
   } catch {
-    write("nothing exported yet");
-    write(hint("cc-hindsight export"));
-    return 1;
+    // No manifest yet. Offer to run export first (deterministic, local, no LLM)
+    // so a first-time user can go from zero to a library in one command. Same
+    // read surface as the default `scan`, so this is not a new trust boundary;
+    // the LLM consent gate below is untouched.
+    if (args["dry-run"]) {
+      write("nothing exported yet — run `cc-hindsight export` first (free, local), then re-run.");
+      write(hint("cc-hindsight export"));
+      return 1;
+    }
+    const doExport =
+      Boolean(args.yes) ||
+      (canPrompt &&
+        (await askYesNo(
+          "No exports yet. Run export now? (reads ~/.claude, writes ~/.cc-hindsight; no LLM, nothing sent anywhere)",
+          { input: deps.input, output: deps.output, defaultYes: true },
+        )));
+    if (!doExport) {
+      write("nothing exported yet");
+      write(hint("cc-hindsight export"));
+      return 1;
+    }
+    write();
+    write("export — reading your sessions…");
+    runExport({
+      home: args.home,
+      "claude-dir": args["claude-dir"],
+      project: args.project,
+      output: deps.output,
+    } satisfies ExportArgs);
+    write();
+    try {
+      raw = fs.readFileSync(manifestPath, "utf8");
+    } catch {
+      write("export produced no manifest — nothing to distill.");
+      return 1;
+    }
   }
 
   let entries: ManifestEntry[];
@@ -381,6 +423,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       truncate,
       timeoutMs,
       force: args.force === true,
+      concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
     });
 
     write();
@@ -404,6 +447,36 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
         write(`  ✗ ${f.export}: ${f.error}`);
       }
       hadFailure = true;
+    }
+
+    // Offer to show the freshly-built library — the payoff of the one-shot flow
+    // is watching it appear. Pure local display (no cost), so the default is
+    // yes; --yes shows it without prompting; a pipe/CI without --yes just skips.
+    if (authoredTotal > 0) {
+      const show =
+        Boolean(args.yes) ||
+        (canPrompt &&
+          (await askYesNo("Show your library now?", {
+            input: deps.input,
+            output: deps.output,
+            defaultYes: true,
+          })));
+      if (show) {
+        const libraryEntries = readLibrary(home);
+        if (libraryEntries.length > 0) {
+          write();
+          write(renderLibraryTable(libraryEntries));
+          write();
+          write(
+            green(
+              `${libraryEntries.length} librar${libraryEntries.length === 1 ? "y entry" : "y entries"}`,
+            ),
+          );
+          write(hint("cc-hindsight show <slug>"));
+          write(hint("cc-hindsight copy <slug>"));
+          return hadFailure ? 1 : 0;
+        }
+      }
     }
   } catch (err) {
     write(`  ✗ ${(err as Error).message}`);
@@ -454,7 +527,7 @@ export default defineCommand({
     },
     concurrency: {
       type: "string",
-      description: "Digest calls run in parallel (default 3; 1 = sequential)",
+      description: "Digest and author calls run in parallel (default 3; 1 = sequential)",
     },
     force: {
       type: "boolean",

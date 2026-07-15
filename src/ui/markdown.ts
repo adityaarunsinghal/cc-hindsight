@@ -1,6 +1,20 @@
 import { styleText } from "node:util";
 
 /**
+ * Apply ANSI styling, honoring THIS module's explicit `color` flag rather than
+ * Node's stream auto-detection. `styleText`'s default path re-inspects
+ * `process.stdout` and silently strips escapes whenever it looks non-color
+ * (piped output, CI, the test runner) — which would override an explicit
+ * `color: true` and make the flag a lie. `validateStream: false` disables that
+ * re-check so the caller's decision is authoritative. Safe here because the
+ * TTY-vs-pipe choice is made upstream (show.ts prints raw markdown when stdout
+ * is not a TTY and never reaches this module with color on), and NO_COLOR is
+ * likewise the caller's business — this module only styles when asked to.
+ */
+const sty = (format: Parameters<typeof styleText>[0], text: string): string =>
+  styleText(format, text, { validateStream: false });
+
+/**
  * ui/markdown.ts — zero-dependency ANSI rendering of the markdown subset that
  * authored oneshots (and exports) actually use: headings, **bold**, `inline
  * code`, fenced code blocks, bullet/numbered lists, paragraphs.
@@ -72,7 +86,7 @@ function paint(word: Word, color: boolean): string {
   return word.fragments
     .map((f) => {
       if (!color || f.kind === "plain") return f.text;
-      return f.kind === "bold" ? styleText("bold", f.text) : styleText("cyan", f.text);
+      return f.kind === "bold" ? sty("bold", f.text) : sty("cyan", f.text);
     })
     .join("");
 }
@@ -127,7 +141,7 @@ export function renderMarkdownAnsi(markdown: string, opts: RenderOptions = {}): 
     if (fence) {
       if (line.trim().startsWith("```")) {
         for (const code of fence) {
-          out.push(color ? styleText("dim", `    ${code}`) : `    ${code}`);
+          out.push(color ? sty("dim", `    ${code}`) : `    ${code}`);
         }
         blank();
         fence = null;
@@ -148,7 +162,7 @@ export function renderMarkdownAnsi(markdown: string, opts: RenderOptions = {}): 
       flushParagraph();
       blank();
       const text = heading[1].replace(/\*\*/g, "");
-      out.push(color ? styleText(["bold", "underline"], text) : text);
+      out.push(color ? sty(["bold", "underline"], text) : text);
       blank();
       continue;
     }
@@ -176,7 +190,7 @@ export function renderMarkdownAnsi(markdown: string, opts: RenderOptions = {}): 
   }
   if (fence) {
     for (const code of fence) {
-      out.push(color ? styleText("dim", `    ${code}`) : `    ${code}`);
+      out.push(color ? sty("dim", `    ${code}`) : `    ${code}`);
     }
   }
   flushParagraph();

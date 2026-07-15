@@ -613,4 +613,121 @@ describe("runAuthorStage", () => {
     expect(prompt).toContain('"option 2"');
     expect(prompt).toContain("Which db?");
   });
+
+  // --- concurrency -----------------------------------------------------------
+  // A runner that records how many calls are in flight at once, releasing each
+  // only after every worker has had a chance to start (a shared barrier). The
+  // observed peak proves real overlap rather than accidental interleaving.
+  function trackingRunner(target: number): {
+    runner: RunnerFn;
+    maxActive: () => number;
+  } {
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const runner: RunnerFn = (async () => {
+      active++;
+      peak = Math.max(peak, active);
+      // Once `target` calls are simultaneously parked, open the gate so they
+      // all resolve; with fewer than `target` workers the gate opens when the
+      // last-started worker parks (peak then equals the worker count).
+      if (active >= target) release();
+      await Promise.race([gate, new Promise((r) => setTimeout(r, 250))]);
+      active--;
+      return AUTHORED;
+    }) as RunnerFn;
+    return { runner, maxActive: () => peak };
+  }
+
+  function manyTasks(home: string, n: number): ClusterTask[] {
+    const tasks: ClusterTask[] = [];
+    for (let i = 0; i < n; i++) {
+      const name = `m${i}.md`;
+      fs.writeFileSync(path.join(home, "exports", name), `### t\n\ncontent ${i}\n`);
+      tasks.push(task(`task-number-${i}`, [name]));
+    }
+    return tasks;
+  }
+
+  const manyEntries = (n: number): ManifestEntry[] =>
+    Array.from({ length: n }, (_, i) => entry(`m${i}.md`));
+  const manyDigests = (n: number): Record<string, Digest> =>
+    Object.fromEntries(Array.from({ length: n }, (_, i) => [`m${i}.md`, digest("completed")]));
+
+  it("runs author calls in parallel up to --concurrency", async () => {
+    const home = tmpHome();
+    const tasks = manyTasks(home, 6);
+    const { runner, maxActive } = trackingRunner(3);
+
+    const result = await runAuthorStage({
+      home,
+      entries: manyEntries(6),
+      generation: "g1",
+      toolVersion: "0.1.0",
+      output: sink(),
+      tasks,
+      digests: manyDigests(6),
+      runner,
+      concurrency: 3,
+    });
+
+    expect(result.authored).toHaveLength(6);
+    expect(maxActive()).toBe(3); // three calls genuinely in flight at once
+  });
+
+  it("stays sequential at concurrency 1 (default)", async () => {
+    const home = tmpHome();
+    const tasks = manyTasks(home, 4);
+    const { runner, maxActive } = trackingRunner(4);
+
+    const result = await runAuthorStage({
+      home,
+      entries: manyEntries(4),
+      generation: "g1",
+      toolVersion: "0.1.0",
+      output: sink(),
+      tasks,
+      digests: manyDigests(4),
+      runner,
+      concurrency: 1,
+    });
+
+    expect(result.authored).toHaveLength(4);
+    expect(maxActive()).toBe(1); // never more than one call in flight
+  });
+
+  it("reports results in stable task order regardless of completion timing", async () => {
+    const home = tmpHome();
+    const tasks = manyTasks(home, 5);
+    // Resolve in a jittered order so a naive push-on-finish would scramble it.
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      const m = /task-number-(\d+)/.exec(opts.prompt);
+      const i = m ? Number(m[1]) : 0;
+      await new Promise((r) => setTimeout(r, (5 - i) * 5));
+      return AUTHORED;
+    }) as RunnerFn;
+
+    const result = await runAuthorStage({
+      home,
+      entries: manyEntries(5),
+      generation: "g1",
+      toolVersion: "0.1.0",
+      output: sink(),
+      tasks,
+      digests: manyDigests(5),
+      runner,
+      concurrency: 5,
+    });
+
+    expect(result.authored).toEqual([
+      "task-number-0",
+      "task-number-1",
+      "task-number-2",
+      "task-number-3",
+      "task-number-4",
+    ]);
+  });
 });
