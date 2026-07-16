@@ -14,3 +14,8 @@ demo/
 
 # Launch copy drafts (local-only working dir; nothing here ships)
 launch/
+
+# local verification scratch (not for upstream)
+.golden-baseline/
+.golden-*/
+npm-install.log
