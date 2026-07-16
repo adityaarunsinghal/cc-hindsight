@@ -93,6 +93,23 @@ unsupported). `scan` and `export` are fully deterministic: no LLM, no
 network. `distill` uses the `claude` CLI you already have, and never without
 asking.
 
+### Multiple backends (Claude Code + kiro-cli)
+
+cc-hindsight also mines [kiro-cli](https://docs.hub.amazon.dev/) session
+history the same way. Every command takes `--source claude|kiro|auto` (default
+`auto`: read whichever stores exist) and `--kiro-dir` / `KIRO_CONFIG_DIR`
+(default `~/.kiro`, parallel to `--claude-dir`). A machine with both stores
+merges them into one library; the manifest tags each session's `origin` and the
+export summary breaks the count down (`9 claude + 3 kiro`).
+
+`distill --runner claude|kiro|auto` chooses which CLI does the distilling —
+orthogonal to `--source`, so you can mine kiro history and distill with claude
+or vice-versa (`auto` prefers the CLI matching your source, else whichever is
+installed). `preferences --target claude|kiro|agents` emits a `CLAUDE.md`
+block, a `~/.kiro/steering/` file, or a portable `AGENTS.md` section. See
+[docs/kiro-backend.md](docs/kiro-backend.md) for the on-disk format and the
+runner's verified behavior.
+
 ## Privacy & trust
 
 For a tool that reads your entire conversation history, auditability is the

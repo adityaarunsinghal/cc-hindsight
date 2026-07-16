@@ -27,10 +27,16 @@ untested.
 - **Three runtime dependencies** (`citty`, `zod`, `@clack/prompts`): keep the
   tree auditable in one sitting. A new dependency needs to clearly reduce code
   or pay for itself in UX; when in doubt, hand-roll it or leave it out.
-- **Tests never read `~/.claude` or write outside temp dirs.** Every test runs
-  against synthetic fixtures under `test/fixtures/`.
+- **Tests never read `~/.claude` OR `~/.kiro`, or write outside temp dirs.**
+  Every test runs against synthetic fixtures under `test/fixtures/`. Because
+  `--source` defaults to `auto` (read whichever backend stores exist), a test
+  that only sets `--claude-dir` would silently pick up a dev's real `~/.kiro`;
+  pin `source: "claude"` (or point `--kiro-dir` at a nonexistent path) in every
+  fixture-scoped test.
 - **No LLM calls outside `distill` / `preferences --consolidate`**, and never
-  without the consent gate. Unit tests mock the spawn layer.
+  without the consent gate. Unit tests mock the spawn layer — the kiro runner
+  spawn is mocked exactly like the claude one; no test ever invokes real
+  `kiro-cli`.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, …).
 
 ## The extraction fidelity contract
@@ -62,7 +68,34 @@ Claude Code's JSONL format drifts. If you hit a session that exports wrongly
 
 The same pattern applies to discovery (`test/fixtures/claude-home/`), export
 dedupe (`test/fixtures/export-home/`), and anaphora
-(`test/fixtures/anaphora-home/`).
+(`test/fixtures/anaphora-home/`). The kiro backend has its own fixture trees:
+`test/fixtures/kiro-home/` (discovery + the session-level classify gate) and
+`test/fixtures/kiro-extract/` (the K-rules); the drill is identical — copy the
+`{version, kind, data}` line shape, not your data.
+
+## Multi-backend architecture (the seam)
+
+cc-hindsight reads two backends (Claude Code, kiro-cli) through one seam:
+
+- **`SessionSource`** (`src/sources/types.ts`) is the source-agnostic currency.
+  Each backend's adapter (`src/sources/{claude,kiro}/`) turns raw lines into the
+  same `ExtractResult` + `TimelineEvent[]`; everything downstream (dedupe,
+  anaphora, outcome, render, distill) consumes only those and never parses raw
+  lines. Adding a backend = one new `sources/<name>/` adapter + a registry entry.
+- **The SessionSource law:** every message in `extract(lines).messages` MUST
+  appear as a `human` `TimelineEvent` from `timeline(lines)` with identical
+  `(timestamp, text)`, in file order. The dedupe key and the anaphora↔export
+  index alignment both depend on it — a backend satisfies it by producing both
+  texts from one shared per-entry function (claude: `humanEntryText`; kiro:
+  `promptText`). Each backend has an extract↔timeline agreement test; keep it.
+- **`AgentRunner`** (`src/runners/`) is the distill CLI seam. `shared.ts` holds
+  the backend-agnostic spawn/error/retry primitives; `claude.ts` and `kiro.ts`
+  each add their invocation specifics. The kiro runner layers two retries: a
+  transient **empty-stdout backoff** (kiro's "having trouble responding" returns
+  exit 0 + empty stdout — retry the *same* input, no corrective note) sits
+  *below* the shared **corrective retry** (bad JSON → retry once *with* a
+  corrective note). Don't collapse them: burning the corrective retry on a
+  transport blip wastes it.
 
 ## Prompt changes
 
