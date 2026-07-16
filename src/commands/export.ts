@@ -9,10 +9,11 @@ import {
   TAIL_CHARS,
 } from "../core/anaphora.js";
 import { buildCorpus, type Corpus, type CorpusSession, type DedupeInput } from "../core/dedupe.js";
-import { discoverProjects } from "../core/discover.js";
 import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { buildOutcome, FINAL_TURNS, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
 import { exportFileName, renderExport } from "../core/render.js";
+import { claudeSource } from "../sources/claude/index.js";
+import type { TimelineEvent } from "../sources/types.js";
 import { dim, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -97,9 +98,13 @@ export function runExport(opts: ExportArgs): ExportStats {
   const minMessages = parseClampedInt(opts["min-messages"], { fallback: 1, min: 1 });
   const exportsDir = path.join(home, "exports");
 
+  // The Claude Code backend as a SessionSource. Extraction and timeline both
+  // run through it, so the seam is uniform (kiro plugs in the same way).
+  const source = claudeSource(claudeDir);
+
   // Entry counts are unused by export (content is read below); skip the count
   // read so each session file is read at most once for this command.
-  const projects = discoverProjects(claudeDir, { countEntries: false });
+  const projects = source.discover({ countEntries: false });
 
   // Apply the --project filter; count the sessions it excludes for reporting.
   let skippedByFilter = 0;
@@ -112,7 +117,12 @@ export function runExport(opts: ExportArgs): ExportStats {
   });
 
   // Read every selected session into the corpus input, tolerating read errors.
+  // Extraction runs through the source here; the timeline is deferred to a lazy
+  // per-source thunk keyed by the unique source path, so the anaphora/outcome
+  // passes below walk the SAME lines through the SAME source (the SessionSource
+  // law — extract↔timeline agreement — is what keeps index alignment sacred).
   const inputs: DedupeInput[] = [];
+  const timelineOf = new Map<string, () => TimelineEvent[]>();
   let readErrors = 0;
   const readErrorPaths: string[] = [];
   for (const project of selected) {
@@ -125,23 +135,20 @@ export function runExport(opts: ExportArgs): ExportStats {
         readErrorPaths.push(session.path);
         continue;
       }
+      const lines = content.split(/\r?\n/);
       inputs.push({
         project: project.shortName,
         sessionId: session.file.replace(/\.jsonl$/, ""),
         sourcePath: session.path,
-        lines: content.split(/\r?\n/),
+        extracted: source.extract(lines),
       });
+      timelineOf.set(session.path, () => source.timeline(lines));
     }
   }
 
   // ONE shared dedupe pass (rule R8) — anaphora/outcome reuse this exact
   // corpus so their record indices align with the rendered export exactly.
   const corpus = buildCorpus(inputs);
-
-  // Raw lines per session for the anaphora/outcome timeline walk (keyed by the
-  // unique source path). The corpus itself carries no raw lines.
-  const linesBySource = new Map<string, string[]>();
-  for (const inp of inputs) linesBySource.set(inp.sourcePath, inp.lines);
 
   // Partition sessions by the min-messages threshold.
   let zeroMessageSessions = 0;
@@ -186,10 +193,10 @@ export function runExport(opts: ExportArgs): ExportStats {
     });
     totalMessages += session.messages.length;
 
-    const lines = linesBySource.get(session.sourcePath) ?? [];
-    const records = buildAnaphora(session, lines);
+    const timeline = timelineOf.get(session.sourcePath)?.() ?? [];
+    const records = buildAnaphora(session, timeline);
     anaphoraByFile[file] = records;
-    const outcome = buildOutcome(session, lines);
+    const outcome = buildOutcome(session, timeline);
     outcomesByFile[file] = outcome;
     if (outcome.final_assistant_tail !== "") outcomeSessions++;
     shortTurns += records.length;

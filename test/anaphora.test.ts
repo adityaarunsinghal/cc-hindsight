@@ -8,6 +8,7 @@ import {
   wordCount,
 } from "../src/core/anaphora.js";
 import { buildCorpus, type CorpusSession, type DedupeInput } from "../src/core/dedupe.js";
+import { extractMessages, extractTimeline } from "../src/core/extract.js";
 import { renderExport } from "../src/core/render.js";
 
 // ---- JSONL line builders (synthetic; never the real ~/.claude) ----------
@@ -58,15 +59,17 @@ const T5 = "2026-01-01T00:05:00.000Z";
 
 /** Build the single session's corpus entry from raw lines. */
 function sessionOf(lines: string[], sessionId = "s"): CorpusSession {
-  const corpus = buildCorpus([{ project: "p", sessionId, sourcePath: `/${sessionId}`, lines }]);
+  const corpus = buildCorpus([
+    { project: "p", sessionId, sourcePath: `/${sessionId}`, extracted: extractMessages(lines) },
+  ]);
   const session = corpus.sessions.find((s) => s.sessionId === sessionId);
   if (!session) throw new Error("no session built");
   return session;
 }
 
-/** Run the anaphora pass over one synthetic session. */
+/** Run the anaphora pass over one synthetic session (timeline via the claude source). */
 function anaphoraFor(lines: string[]): AnaphoraRecord[] {
-  return buildAnaphora(sessionOf(lines), lines);
+  return buildAnaphora(sessionOf(lines), extractTimeline(lines));
 }
 
 // ---- short-turn detection ---------------------------------------------------
@@ -230,7 +233,7 @@ describe("anaphora — index alignment with rendered export", () => {
       userLine(T4, "do it"),
     ];
     const session = sessionOf(lines);
-    const records = buildAnaphora(session, lines);
+    const records = buildAnaphora(session, extractTimeline(lines));
     const blocks = parseRenderedBlocks(renderExport(session));
 
     expect(records.length).toBeGreaterThan(0);
@@ -242,29 +245,31 @@ describe("anaphora — index alignment with rendered export", () => {
   });
 
   it("aligns records to post-dedupe indices and drops fork-copy ownership", () => {
+    const linesA = [assistantText(T0, "context essay"), userLine(T1, "yes")];
+    const linesB = [
+      assistantText(T0, "context essay"), // assistant turns are not deduped
+      userLine(T1, "yes"), // fork copy of A's owned turn → no record here
+      userLine(T2, "new short turn"), // genuinely new → owned + recorded
+    ];
     const sessionA: DedupeInput = {
       project: "p",
       sessionId: "sess-a",
       sourcePath: "/a",
-      lines: [assistantText(T0, "context essay"), userLine(T1, "yes")],
+      extracted: extractMessages(linesA),
     };
     const sessionB: DedupeInput = {
       project: "p",
       sessionId: "sess-b",
       sourcePath: "/b",
-      lines: [
-        assistantText(T0, "context essay"), // assistant turns are not deduped
-        userLine(T1, "yes"), // fork copy of A's owned turn → no record here
-        userLine(T2, "new short turn"), // genuinely new → owned + recorded
-      ],
+      extracted: extractMessages(linesB),
     };
     const corpus = buildCorpus([sessionA, sessionB]);
     const a = corpus.sessions.find((s) => s.sessionId === "sess-a");
     const b = corpus.sessions.find((s) => s.sessionId === "sess-b");
     if (!a || !b) throw new Error("sessions missing");
 
-    const aRecords = buildAnaphora(a, sessionA.lines);
-    const bRecords = buildAnaphora(b, sessionB.lines);
+    const aRecords = buildAnaphora(a, extractTimeline(linesA));
+    const bRecords = buildAnaphora(b, extractTimeline(linesB));
 
     // A owns "yes" at post-dedupe index 0, with the essay as antecedent.
     expect(aRecords.map((r) => r.human_text)).toEqual(["yes"]);
