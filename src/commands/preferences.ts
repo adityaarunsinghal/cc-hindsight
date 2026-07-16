@@ -9,6 +9,8 @@ import {
   renderClaudeMdBlock,
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
+import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
+import { parseSourceMode } from "../sources/registry.js";
 import { withSpinner } from "../ui/progress.js";
 import { cyan, dim, green, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
@@ -42,6 +44,9 @@ export async function runPreferences(
   args: {
     home?: string;
     "claude-dir"?: string;
+    "kiro-dir"?: string;
+    source?: string;
+    runner?: string;
     consolidate?: boolean;
     yes?: boolean;
     model?: string;
@@ -80,8 +85,18 @@ export async function runPreferences(
     return 0;
   }
 
-  // --consolidate: one claude call, behind the same consent gate as distill.
-  write("consolidate will invoke your local `claude` CLI once (your subscription/credits).");
+  // --consolidate: one runner call, behind the same consent gate as distill.
+  // Route through resolveRunner so a kiro-only machine works (and the copy names
+  // whichever CLI will actually run); an injected deps.runner (tests) bypasses it.
+  const sourceMode = parseSourceMode(args.source);
+  const resolved = deps.runner
+    ? null
+    : await resolveRunner(parseRunnerMode(args.runner), {
+        preferSource: sourceMode === "auto" ? undefined : sourceMode,
+      });
+  const cli = resolved?.name === "kiro" ? "kiro-cli" : "claude";
+  const cost = resolved?.name === "kiro" ? "your Kiro credits" : "your subscription/credits";
+  write(`consolidate will invoke your local \`${cli}\` CLI once (${cost}).`);
   const confirmed =
     Boolean(args.yes) || (await askYesNo("Proceed?", { input: deps.input, output: deps.output }));
   if (!confirmed) {
@@ -89,8 +104,7 @@ export async function runPreferences(
     return 2;
   }
 
-  const { runClaude } = await import("../claude/runner.js");
-  const runner: RunnerFn = deps.runner ?? runClaude;
+  const runner: RunnerFn = deps.runner ?? (resolved as NonNullable<typeof resolved>).run;
   let consolidated: Consolidated;
   try {
     consolidated = await withSpinner(out, `consolidating ${prefs.length} preference(s)`, () =>
@@ -133,11 +147,15 @@ export default defineCommand({
     ...sharedArgs,
     consolidate: {
       type: "boolean",
-      description: "Merge semantic duplicates with one claude call (consent-gated)",
+      description: "Merge semantic duplicates with one runner call (consent-gated)",
+    },
+    runner: {
+      type: "string",
+      description: "Which local CLI consolidates: claude, kiro, or auto (default: auto)",
     },
     model: {
       type: "string",
-      description: "Model to pass through to `claude --model` for --consolidate",
+      description: "Model to pass through to the runner's --model for --consolidate",
     },
     yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
   },

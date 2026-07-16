@@ -68,6 +68,24 @@ describe("renderPlan", () => {
     expect(strip(renderPlan({ digests: 14, cluster: 1, authorEstimate: 5 }))).toBe(expected);
   });
 
+  it("names kiro-cli and Kiro credits when the runner is kiro", () => {
+    const out = strip(
+      renderPlan({ digests: 14, cluster: 1, authorEstimate: 5, runnerName: "kiro" }),
+    );
+    expect(out).toContain("distill will invoke your local `kiro-cli` CLI (your Kiro credits):");
+    expect(out).toContain("through your own kiro-cli CLI.");
+    expect(out).not.toContain("claude");
+  });
+
+  it("defaults to the byte-identical claude copy when runnerName is absent", () => {
+    // runnerName undefined ⇒ claude (the old-manifest / default-runner behavior).
+    const withName = strip(
+      renderPlan({ digests: 3, cluster: 1, authorEstimate: 1, runnerName: "claude" }),
+    );
+    const without = strip(renderPlan({ digests: 3, cluster: 1, authorEstimate: 1 }));
+    expect(without).toBe(withName);
+  });
+
   it("appends a resume note line when checkpoints exist", () => {
     const out = strip(
       renderPlan({
@@ -274,6 +292,26 @@ describe("computePlan (count math)", () => {
   it("zeroes everything when nothing is eligible", () => {
     const plan = computePlan([entry("a", "x", 1)], { minSubstance: 2, noGroup: false });
     expect(plan).toMatchObject({ digests: 0, cluster: 0, authorEstimate: 0 });
+  });
+
+  it("filters by activeOrigins, treating a missing origin as claude", () => {
+    const c = entry("c1", "x", 5); // no origin ⇒ claude (old-manifest rule)
+    const k = { ...entry("k1", "y", 5), origin: "kiro" as const };
+    // --source claude keeps only the origin-less (claude) entry.
+    expect(
+      computePlan([c, k], { minSubstance: 2, noGroup: false, activeOrigins: new Set(["claude"]) })
+        .digests,
+    ).toBe(1);
+    // --source kiro keeps only the kiro entry.
+    const kiroPlan = computePlan([c, k], {
+      minSubstance: 2,
+      noGroup: false,
+      activeOrigins: new Set(["kiro"]),
+    });
+    expect(kiroPlan.digests).toBe(1);
+    expect(kiroPlan.eligible[0]?.export).toBe("k1");
+    // No filter (auto) keeps both.
+    expect(computePlan([c, k], { minSubstance: 2, noGroup: false }).digests).toBe(2);
   });
 });
 

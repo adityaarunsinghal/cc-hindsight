@@ -681,7 +681,7 @@ function provenanceComment(sources: SourcesJson): string {
     `  task: ${sources.slug} (generation ${sources.generation})`,
     `  sources: ${sources.members.join(", ")}`,
     `  outcomes: ${sources.outcome_summary}; confidence: ${sources.confidence}`,
-    `  model: ${sources.model ?? "claude CLI default"}; prompt v${sources.prompt_version}; ${sources.authored_at}`,
+    `  model: ${sources.model ?? "runner default"}; prompt v${sources.prompt_version}; ${sources.authored_at}`,
     "-->",
   ].join("\n");
 }

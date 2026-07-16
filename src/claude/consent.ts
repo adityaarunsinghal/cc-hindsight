@@ -20,6 +20,12 @@ export interface DistillPlan {
   cluster: 0 | 1;
   /** Estimated authoring calls (one per task; exact count known post-cluster). */
   authorEstimate: number;
+  /**
+   * Which local CLI will be invoked ("claude" | "kiro"). Defaults to "claude"
+   * so the disclosure copy is byte-identical to before when the resolved runner
+   * is claude; a kiro runner names kiro (and its credits) instead.
+   */
+  runnerName?: "claude" | "kiro";
   /** Optional resume line shown when checkpoints already exist. */
   resumeNote?: string;
   /** Input budget in chars — when set, a coverage disclosure line is shown. */
@@ -28,6 +34,13 @@ export interface DistillPlan {
   truncate?: "never" | "extreme";
   /** Eligible sessions whose content exceeds the budget (consent-time estimate). */
   oversized?: { export: string; chars: number }[];
+}
+
+/** Human-facing CLI name + the cost noun, per runner (for consent copy). */
+function runnerCopy(name: DistillPlan["runnerName"]): { cli: string; cost: string } {
+  return name === "kiro"
+    ? { cli: "kiro-cli", cost: "your Kiro credits" }
+    : { cli: "claude", cost: "your subscription/credits" };
 }
 
 export interface ConsentOptions {
@@ -61,13 +74,14 @@ export function renderPlan(plan: DistillPlan): string {
 
   const total = plan.digests + plan.cluster + plan.authorEstimate;
   const count = (s: string) => bold(cyan(s.padStart(width)));
+  const { cli, cost } = runnerCopy(plan.runnerName);
 
   const lines = [
-    "  distill will invoke your local `claude` CLI (your subscription/credits):",
+    `  distill will invoke your local \`${cli}\` CLI (${cost}):`,
     `    ${dim("•")} ${count(digestStr)} session digests`,
     `    ${dim("•")} ${count(clusterStr)} clustering call`,
     `    ${dim("•")} ${count(authorStr)} oneshot authoring calls (one per task; exact count known after clustering)`,
-    `  ≈ ${bold(cyan(String(total)))} invocations total.${dim(" Nothing is sent anywhere except through your own claude CLI.")}`,
+    `  ≈ ${bold(cyan(String(total)))} invocations total.${dim(` Nothing is sent anywhere except through your own ${cli} CLI.`)}`,
   ];
   // Coverage disclosure: only shown when a budget context is supplied.
   // never-mode overflow is refused BEFORE consent (pre-spend), so the only case
