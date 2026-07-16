@@ -1,0 +1,3 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"run the deploy"}],"meta":{"timestamp":1784000000}}}
+{"version":"v1","kind":"ToolResults","data":{"message_id":"m2","content":[{"kind":"toolResult","data":{"toolUseId":"t1","status":"error","content":[{"kind":"text","data":"Tool use was cancelled by the user"}]}}],"results":{}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m3","content":[{"kind":"text","data":"actually do it differently"}],"meta":{"timestamp":1784000600}}}

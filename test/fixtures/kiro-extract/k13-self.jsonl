@@ -1,0 +1,1 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"[cc-hindsight distill] You are distilling a session. Respond with JSON."}],"meta":{"timestamp":1784000000}}}

@@ -10,6 +10,10 @@ import { type ExportArgs, type ManifestEntry, runExport } from "../src/commands/
 // every home directory is a fresh mkdtemp, never a real ~/.cc-hindsight.
 const CLAUDE_HOME = path.join(import.meta.dirname, "fixtures", "export-home");
 const ALPHA_DIR = path.join(CLAUDE_HOME, "projects", "-Users-dev-alpha");
+// A kiro dir that does not exist, so `--source auto` collapses to claude-only:
+// a test machine's real ~/.kiro can never leak in (the "never read the real
+// store" rule extends to kiro), while auto-mode behavior (e.g. prune) still runs.
+const NO_KIRO = path.join(CLAUDE_HOME, "no-kiro-here");
 
 const tmpHomes: string[] = [];
 
@@ -45,7 +49,13 @@ function run(extra: Partial<ExportArgs> = {}): {
 } {
   const home = freshHome();
   const { sink, text } = makeSink();
-  const stats = runExport({ home, "claude-dir": CLAUDE_HOME, output: sink, ...extra });
+  const stats = runExport({
+    home,
+    "claude-dir": CLAUDE_HOME,
+    "kiro-dir": NO_KIRO,
+    output: sink,
+    ...extra,
+  });
   return { home, stats, out: text() };
 }
 
@@ -104,6 +114,7 @@ describe("export — default run", () => {
     expect(forked).toEqual({
       export: "alpha-b2222222.md",
       source: path.join(ALPHA_DIR, "b2222222-2222-2222-2222-222222222222.jsonl"),
+      origin: "claude",
       project: "alpha",
       sessionId: "b2222222-2222-2222-2222-222222222222",
       messages: 3,
@@ -132,7 +143,7 @@ describe("export — idempotency", () => {
   it("re-running against the same input produces byte-identical files", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink });
+    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
 
     const dir = path.join(home, "exports");
     const first = new Map<string, Buffer>();
@@ -140,7 +151,7 @@ describe("export — idempotency", () => {
 
     // Run a second time into the same home.
     const { sink: sink2 } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink2 });
+    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink2 });
 
     const second = new Map<string, Buffer>();
     for (const f of fs.readdirSync(dir)) second.set(f, fs.readFileSync(path.join(dir, f)));
@@ -156,12 +167,17 @@ describe("export — hygiene & permissions", () => {
   it("prunes a stale export whose session vanished, on an unfiltered run", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink });
+    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
     const stale = path.join(home, "exports", "ghost-deadbeef.md");
     fs.writeFileSync(stale, "# stale");
 
     const { sink: sink2 } = makeSink();
-    const stats = runExport({ home, "claude-dir": CLAUDE_HOME, output: sink2 });
+    const stats = runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      output: sink2,
+    });
     expect(fs.existsSync(stale)).toBe(false);
     expect(stats.prunedExports).toBe(1);
   });
@@ -169,12 +185,18 @@ describe("export — hygiene & permissions", () => {
   it("does NOT prune under a --project filter (subset run)", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, output: sink });
+    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
     const other = path.join(home, "exports", "other-project.md");
     fs.writeFileSync(other, "# from another scope");
 
     const { sink: sink2 } = makeSink();
-    const stats = runExport({ home, "claude-dir": CLAUDE_HOME, project: "alpha", output: sink2 });
+    const stats = runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      project: "alpha",
+      output: sink2,
+    });
     expect(fs.existsSync(other)).toBe(true);
     expect(stats.prunedExports).toBe(0);
   });
@@ -240,6 +262,7 @@ describe("export — verbose observability", () => {
     const { stats } = run({ verbose: true });
     expect(Object.keys(stats).sort()).toEqual(
       [
+        "automationSkipped",
         "badLines",
         "belowMinMessages",
         "duplicatesDropped",
@@ -249,6 +272,7 @@ describe("export — verbose observability", () => {
         "outcomeSessions",
         "prunedExports",
         "readErrors",
+        "sessionsByOrigin",
         "shortTurns",
         "shortTurnsWithDecision",
         "skippedByFilter",
@@ -271,7 +295,13 @@ function runAnaphora(extra: Partial<ExportArgs> = {}): {
 } {
   const home = freshHome();
   const { sink, text } = makeSink();
-  const stats = runExport({ home, "claude-dir": ANAPHORA_HOME, output: sink, ...extra });
+  const stats = runExport({
+    home,
+    "claude-dir": ANAPHORA_HOME,
+    "kiro-dir": NO_KIRO,
+    output: sink,
+    ...extra,
+  });
   return { home, stats, out: text() };
 }
 
@@ -387,13 +417,13 @@ describe("export — anaphora + outcome artifacts", () => {
   it("re-running is byte-identical for the JSON artifacts (idempotent)", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": ANAPHORA_HOME, output: sink });
+    runExport({ home, "claude-dir": ANAPHORA_HOME, "kiro-dir": NO_KIRO, output: sink });
     const dir = path.join(home, "exports");
     const first = new Map<string, Buffer>();
     for (const f of fs.readdirSync(dir)) first.set(f, fs.readFileSync(path.join(dir, f)));
 
     const { sink: sink2 } = makeSink();
-    runExport({ home, "claude-dir": ANAPHORA_HOME, output: sink2 });
+    runExport({ home, "claude-dir": ANAPHORA_HOME, "kiro-dir": NO_KIRO, output: sink2 });
     for (const f of fs.readdirSync(dir)) {
       expect(fs.readFileSync(path.join(dir, f)).equals(first.get(f) as Buffer)).toBe(true);
     }
@@ -407,5 +437,48 @@ describe("export — anaphora + outcome artifacts", () => {
     expect(out).toContain("short turn(s) attached");
     expect(out).toContain("+plan");
     expect(out).toContain("+question");
+  });
+});
+
+// ---- kiro backend integration (kiro-home) ----------------------------------
+
+const KIRO_HOME = path.join(import.meta.dirname, "fixtures", "kiro-home");
+
+describe("export — kiro source", () => {
+  it("exports interactive kiro sessions, tagging manifest origin=kiro", () => {
+    const home = freshHome();
+    const { sink, text } = makeSink();
+    const stats = runExport({ home, "kiro-dir": KIRO_HOME, source: "kiro", output: sink });
+
+    // Only the two .history (interactive) sessions export; the [AGENT SYSTEM
+    // PROMPT] automation session and the parent-linked child are classified out.
+    expect(stats.exportedSessions).toBe(2);
+    expect(stats.automationSkipped).toBe(2);
+    expect(stats.sessionsByOrigin).toEqual({ kiro: 2 });
+
+    const manifest = readManifest(home);
+    expect(manifest.length).toBe(2);
+    for (const e of manifest) expect(e.origin).toBe("kiro");
+    // The dark-mode session's first prompt survived to the export markdown.
+    const md = fs.readFileSync(path.join(home, "exports", manifest[0]?.export ?? ""), "utf8");
+    expect(md).toContain("###"); // has at least one timestamped block
+    void text;
+  });
+
+  it("merges claude + kiro under --source auto with a per-origin breakdown", () => {
+    const home = freshHome();
+    const { sink, text } = makeSink();
+    const stats = runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": KIRO_HOME,
+      source: "auto",
+      output: sink,
+    });
+    // 3 claude (export-home alpha) + 2 interactive kiro.
+    expect(stats.sessionsByOrigin).toEqual({ claude: 3, kiro: 2 });
+    expect(text()).toContain("3 claude + 2 kiro;");
+    const origins = new Set(readManifest(home).map((e) => e.origin));
+    expect([...origins].sort()).toEqual(["claude", "kiro"]);
   });
 });
