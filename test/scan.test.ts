@@ -24,14 +24,18 @@ beforeAll(() => {
   }
 });
 
-/** Run `scan` and capture its (VT-stripped) stdout. */
-function captureScan(args: { "claude-dir"?: string }): string {
+/**
+ * Run `scan` and capture its (VT-stripped) stdout. Pins `source: "claude"` so a
+ * test machine's real ~/.kiro store can never leak into these fixture-scoped
+ * assertions (the "tests never read the real store" rule extends to kiro).
+ */
+function captureScan(args: { "claude-dir"?: string; source?: string }): string {
   const logs: string[] = [];
   const spy = vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
     logs.push(parts.map(String).join(" "));
   });
   try {
-    runScan(args);
+    runScan({ source: "claude", ...args });
   } finally {
     spy.mockRestore();
   }
@@ -80,4 +84,32 @@ describe("scan command", () => {
     expect(out).toContain("No Claude Code projects found");
     expect(out).toContain("--claude-dir");
   });
+
+  it("inventories kiro sessions grouped by cwd under --source kiro", () => {
+    const KIRO_HOME = path.join(import.meta.dirname, "fixtures", "kiro-home");
+    const out = captureScanKiro({ "kiro-dir": KIRO_HOME });
+    expect(out).toContain("webapp");
+    expect(out).toContain("api");
+    expect(out).toContain("→ next: cc-hindsight export");
+  });
+
+  it("shows a kiro-specific message pointing at --kiro-dir when nothing is found", () => {
+    const out = captureScanKiro({ "kiro-dir": NO_PROJECTS_HOME });
+    expect(out).toContain("No kiro-cli sessions found");
+    expect(out).toContain("--kiro-dir");
+  });
 });
+
+/** Run `scan --source kiro` and capture its (VT-stripped) stdout. */
+function captureScanKiro(args: { "kiro-dir"?: string }): string {
+  const logs: string[] = [];
+  const spy = vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+    logs.push(parts.map(String).join(" "));
+  });
+  try {
+    runScan({ source: "kiro", ...args });
+  } finally {
+    spy.mockRestore();
+  }
+  return stripVTControlCharacters(logs.join("\n"));
+}

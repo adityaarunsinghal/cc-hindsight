@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"a1","content":[{"kind":"text","data":"[AGENT SYSTEM PROMPT] You are a background worker. Do the thing."}],"meta":{"timestamp":1784001000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"a2","content":[{"kind":"text","data":"Working."}]}}

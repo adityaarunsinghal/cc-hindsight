@@ -11,20 +11,39 @@ export const sharedArgs = {
     type: "string",
     description: "Claude Code config directory (env CLAUDE_CONFIG_DIR)",
   },
+  "kiro-dir": {
+    type: "string",
+    description: "kiro-cli config directory (env KIRO_CONFIG_DIR; default ~/.kiro)",
+  },
+  source: {
+    type: "string",
+    description: "Which backend(s) to read: claude, kiro, or auto (default: auto)",
+  },
 } as const;
 
 export interface ResolvedPaths {
   home: string;
   claudeDir: string;
+  kiroDir: string;
 }
 
-/** Resolve data directories: flag > env > default under os.homedir(). */
-export function resolvePaths(args: { home?: string; "claude-dir"?: string }): ResolvedPaths {
+/**
+ * Resolve data directories: flag > env > default under os.homedir(). The
+ * `kiro-dir` points at the kiro CONFIG root (sessions are read from
+ * `<kiroDir>/sessions/cli`), parallel to `--claude-dir`.
+ */
+export function resolvePaths(args: {
+  home?: string;
+  "claude-dir"?: string;
+  "kiro-dir"?: string;
+}): ResolvedPaths {
   const home =
     args.home ?? process.env.CC_HINDSIGHT_HOME ?? path.join(os.homedir(), ".cc-hindsight");
   const claudeDir =
     args["claude-dir"] ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
-  return { home, claudeDir };
+  const kiroDir =
+    args["kiro-dir"] ?? process.env.KIRO_CONFIG_DIR ?? path.join(os.homedir(), ".kiro");
+  return { home, claudeDir, kiroDir };
 }
 
 /**

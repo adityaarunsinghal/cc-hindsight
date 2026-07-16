@@ -1,5 +1,6 @@
 import { defineCommand } from "citty";
-import { discoverProjects } from "../core/discover.js";
+import { parseSourceMode, resolveSources } from "../sources/registry.js";
+import type { ProjectInfo } from "../sources/types.js";
 import { cyan, dim, green, hint, table } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
@@ -12,15 +13,31 @@ function formatDate(d: Date): string {
 }
 
 /** Scan behavior, shared with the root command (running with no args = scan). */
-export function runScan(args: { home?: string; "claude-dir"?: string }): void {
-  const { claudeDir } = resolvePaths(args);
-  const projects = discoverProjects(claudeDir);
+export function runScan(args: {
+  home?: string;
+  "claude-dir"?: string;
+  "kiro-dir"?: string;
+  source?: string;
+}): void {
+  const { claudeDir, kiroDir } = resolvePaths(args);
+  const mode = parseSourceMode(args.source);
+  const sources = resolveSources(mode, { claudeDir, kiroDir });
+  // Merge every active backend's projects. With a single active source (the
+  // common claude-only machine) this is exactly the old single-store list.
+  const projects: ProjectInfo[] = sources.flatMap((s) => s.discover());
 
   if (projects.length === 0) {
-    console.log(`No Claude Code projects found under ${claudeDir}/projects`);
-    console.log(
-      dim("Point at a different location with --claude-dir <path> (or set CLAUDE_CONFIG_DIR)."),
-    );
+    if (mode === "kiro") {
+      console.log(`No kiro-cli sessions found under ${kiroDir}/sessions/cli`);
+      console.log(
+        dim("Point at a different location with --kiro-dir <path> (or KIRO_CONFIG_DIR)."),
+      );
+    } else {
+      console.log(`No Claude Code projects found under ${claudeDir}/projects`);
+      console.log(
+        dim("Point at a different location with --claude-dir <path> (or set CLAUDE_CONFIG_DIR)."),
+      );
+    }
     return;
   }
 

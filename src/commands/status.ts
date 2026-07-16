@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineCommand } from "citty";
-import { discoverProjects } from "../core/discover.js";
 import { type LibraryIssue, readLibrary, readLibraryIssues } from "../core/library.js";
 import { loadDigests, loadTasks, summarizeOutcomes } from "../distill/pipeline.js";
+import { parseSourceMode, resolveSources, type SourceMode } from "../sources/registry.js";
 import { bold, dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import type { ManifestEntry } from "./distill.js";
@@ -39,14 +39,23 @@ function renderStaleDigests(keys: string[]): string[] {
 }
 
 /** Build the status report: the funnel, per-task marks, orphans, skipped tasks. */
-export function renderStatus(opts: { home: string; claudeDir: string }): string {
+export function renderStatus(opts: {
+  home: string;
+  claudeDir: string;
+  kiroDir?: string;
+  source?: SourceMode;
+}): string {
   const lines: string[] = [];
 
-  // discovered — tolerate a missing claude dir entirely.
+  // discovered — sum over every active backend; tolerate missing stores.
   let discovered: number | null = null;
   try {
-    discovered = discoverProjects(opts.claudeDir, { countEntries: false }).reduce(
-      (n, p) => n + p.sessions.length,
+    const mode = opts.source ?? "auto";
+    const kiroDir = opts.kiroDir ?? path.join(process.env.HOME ?? "", ".kiro");
+    const sources = resolveSources(mode, { claudeDir: opts.claudeDir, kiroDir });
+    discovered = sources.reduce(
+      (n, src) =>
+        n + src.discover({ countEntries: false }).reduce((m, p) => m + p.sessions.length, 0),
       0,
     );
   } catch {
@@ -164,7 +173,9 @@ export default defineCommand({
   },
   args: { ...sharedArgs },
   run({ args }) {
-    const { home, claudeDir } = resolvePaths(args);
-    console.log(renderStatus({ home, claudeDir }));
+    const { home, claudeDir, kiroDir } = resolvePaths(args);
+    console.log(
+      renderStatus({ home, claudeDir, kiroDir, source: parseSourceMode(args.source as string) }),
+    );
   },
 });

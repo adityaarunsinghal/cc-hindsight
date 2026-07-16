@@ -176,7 +176,9 @@ describe("renderStatus", () => {
 
   it("renders the early funnel with hints before anything is distilled", () => {
     const home = tmpHome();
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("discovered  0 session(s)");
     expect(out).toContain("exported    0 session(s)");
     expect(out).toContain("clustered   —");
@@ -226,7 +228,9 @@ describe("renderStatus", () => {
     writeEntry(home, "authored-task-here", { generation: "g2" });
     writeEntry(home, "orphaned-task-here", { generation: "g1" }); // stale generation
 
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("exported    3 session(s)");
     expect(out).toContain("digested    3 session(s)");
     expect(out).toContain("clustered   3 task(s), 0 in misc");
@@ -255,7 +259,9 @@ describe("renderStatus", () => {
         digests: { "a.md": digest, "ghost.md": digest },
       }),
     );
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("1 digested session(s) no longer in the manifest");
     expect(out).toContain("⚠ ghost.md");
   });
@@ -289,7 +295,9 @@ describe("renderStatus", () => {
     writeEntry(home, "kept-task-here", { generation: "g2" });
     writeEntry(home, "merged-away-task", { generation: "g2" });
 
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     // Zombie is NOT counted as authored (1 of 1, not 2 of 1).
     expect(out).toContain("authored    1 of 1 task(s)");
     expect(out).toContain("✓ kept-task-here");
