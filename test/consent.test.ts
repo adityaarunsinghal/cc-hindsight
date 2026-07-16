@@ -668,7 +668,9 @@ describe("runDistill", () => {
     const cap = captureOutput();
     const home = tmpHome(null); // NO manifest
     const code = await runDistill(
-      { home, "claude-dir": EXPORT_FIXTURE },
+      // source:"claude" keeps the offered export hermetic — without it, auto
+      // mode would also read the test machine's real ~/.kiro store.
+      { home, "claude-dir": EXPORT_FIXTURE, source: "claude" },
       // First prompt = the export offer (answer y); consent gate then declines
       // on EOF after the single line is consumed.
       { output: cap.out, input: inputWith("y\n"), runner: stubRunner() },
@@ -697,7 +699,8 @@ describe("runDistill", () => {
     const cap = captureOutput();
     const home = tmpHome(null);
     const code = await runDistill(
-      { home, "claude-dir": EXPORT_FIXTURE, yes: true },
+      // source:"claude" keeps the offered export hermetic (see the test above).
+      { home, "claude-dir": EXPORT_FIXTURE, source: "claude", yes: true },
       { output: cap.out, input: forbiddenInput(), runner: stubRunner() },
     );
     expect(code).toBe(0);
