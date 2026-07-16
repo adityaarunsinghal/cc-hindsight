@@ -56,6 +56,12 @@ export interface SpawnOptions {
   /** Written to the child's stdin, then stdin is closed. */
   input: string;
   timeoutMs: number;
+  /**
+   * Working directory for the child (default: inherit). The kiro runner spawns
+   * from a per-run scratch cwd so its local agent config is discovered and its
+   * auto-saved sessions are isolated for cleanup; the claude runner never sets it.
+   */
+  cwd?: string;
 }
 
 /** All process interaction the runner needs — injectable for testing. */
@@ -89,7 +95,10 @@ function defaultWhich(bin: string): string | null {
 
 function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
-    const child = nodeSpawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = nodeSpawn(bin, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
