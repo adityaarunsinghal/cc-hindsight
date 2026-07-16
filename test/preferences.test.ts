@@ -10,6 +10,7 @@ import {
   aggregatePreferences,
   normalizeKey,
   renderClaudeMdBlock,
+  renderPreferencesBlock,
 } from "../src/core/preferences.js";
 import type { RunnerFn } from "../src/distill/pipeline.js";
 
@@ -161,6 +162,41 @@ describe("renderClaudeMdBlock", () => {
   });
 });
 
+describe("renderPreferencesBlock — targets", () => {
+  const prefs = [
+    {
+      text: "diagnose before acting",
+      count: 1,
+      occurrences: [{ slug: "t", evidence: "e" }],
+      lastAuthoredAt: "",
+    },
+  ];
+  const NOW = new Date("2026-07-13T00:00:00Z");
+
+  it("claude target is byte-identical to renderClaudeMdBlock (deprecated wrapper)", () => {
+    expect(renderPreferencesBlock(prefs, 1, "claude", NOW)).toBe(
+      renderClaudeMdBlock(prefs, 1, NOW),
+    );
+  });
+
+  it("kiro target names the steering file in the provenance comment; body unchanged", () => {
+    const block = renderPreferencesBlock(prefs, 1, "kiro", NOW);
+    expect(block).toContain("~/.kiro/steering/hindsight-preferences.md");
+    expect(block).toContain("## Working preferences");
+    expect(block).toContain("- diagnose before acting");
+    // Same body as claude — only the leading comment differs.
+    const claudeBody = renderClaudeMdBlock(prefs, 1, NOW).split("\n").slice(1).join("\n");
+    expect(block.split("\n").slice(1).join("\n")).toBe(claudeBody);
+  });
+
+  it("agents target points at AGENTS.md; body unchanged", () => {
+    const block = renderPreferencesBlock(prefs, 1, "agents", NOW);
+    expect(block).toContain("add to AGENTS.md");
+    const claudeBody = renderClaudeMdBlock(prefs, 1, NOW).split("\n").slice(1).join("\n");
+    expect(block.split("\n").slice(1).join("\n")).toBe(claudeBody);
+  });
+});
+
 // --- command -------------------------------------------------------------------
 
 describe("runPreferences", () => {
@@ -185,6 +221,25 @@ describe("runPreferences", () => {
     expect(cap.text()).toContain("1 preference(s) across 2 task(s)");
     expect(cap.text()).toContain("- be terse");
     expect(cap.text()).toContain("stated in 2 of 2 tasks");
+  });
+
+  it("--target kiro renders the steering-file block and footer", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const code = await runPreferences({ home, target: "kiro" }, { output: cap.out });
+    expect(code).toBe(0);
+    expect(cap.text()).toContain("~/.kiro/steering/hindsight-preferences.md");
+    expect(cap.text()).toContain("- be terse");
+  });
+
+  it("--target agents renders an AGENTS.md block", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const code = await runPreferences({ home, target: "agents" }, { output: cap.out });
+    expect(code).toBe(0);
+    expect(cap.text()).toContain("AGENTS.md");
   });
 
   it("--consolidate declined exits 2 and never invokes", async () => {

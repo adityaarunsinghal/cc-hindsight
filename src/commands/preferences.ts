@@ -6,7 +6,8 @@ import { readLibrary } from "../core/library.js";
 import {
   type AggregatedPreference,
   aggregatePreferences,
-  renderClaudeMdBlock,
+  type PreferencesTarget,
+  renderPreferencesBlock,
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
@@ -47,6 +48,7 @@ export async function runPreferences(
     "kiro-dir"?: string;
     source?: string;
     runner?: string;
+    target?: string;
     consolidate?: boolean;
     yes?: boolean;
     model?: string;
@@ -55,6 +57,7 @@ export async function runPreferences(
 ): Promise<number> {
   const out = deps.output ?? process.stdout;
   const write = (s = "") => out.write(`${s}\n`);
+  const target = resolveTarget(args.target, parseSourceMode(args.source));
 
   const { home } = resolvePaths(args);
   const entries = readLibrary(home);
@@ -78,10 +81,9 @@ export async function runPreferences(
   write();
 
   if (!args.consolidate) {
-    write(renderClaudeMdBlock(prefs, entries.length));
+    write(renderPreferencesBlock(prefs, entries.length, target));
     write();
-    write(dim("paste the block into your CLAUDE.md — or run with --consolidate"));
-    write(dim("to merge near-duplicates with one claude call."));
+    for (const line of targetFooter(target)) write(dim(line));
     return 0;
   }
 
@@ -121,7 +123,7 @@ export async function runPreferences(
     write(`consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
     write(dim("falling back to the unconsolidated block; retry with --model <model>."));
     write();
-    write(renderClaudeMdBlock(prefs, entries.length));
+    write(renderPreferencesBlock(prefs, entries.length, target));
     return 1;
   }
 
@@ -132,10 +134,47 @@ export async function runPreferences(
     lastAuthoredAt: "",
   }));
   write();
-  write(renderClaudeMdBlock(merged, entries.length));
+  write(renderPreferencesBlock(merged, entries.length, target));
   write();
   write(dim(`consolidated ${prefs.length} → ${merged.length} preference(s).`));
   return 0;
+}
+
+/**
+ * Resolve the preferences target: explicit `--target`, else infer from the
+ * active source (kiro source ⇒ kiro steering; else claude).
+ */
+function resolveTarget(
+  raw: string | undefined,
+  sourceMode: "claude" | "kiro" | "auto",
+): PreferencesTarget {
+  if (raw) {
+    const v = raw.toLowerCase();
+    if (v === "claude" || v === "kiro" || v === "agents") return v;
+    throw new Error(`unknown --target "${raw}" (expected claude, kiro, or agents)`);
+  }
+  return sourceMode === "kiro" ? "kiro" : "claude";
+}
+
+/** Per-target paste instructions shown under the rendered block. */
+function targetFooter(target: PreferencesTarget): string[] {
+  switch (target) {
+    case "kiro":
+      return [
+        "paste the block into ~/.kiro/steering/hindsight-preferences.md (global) or",
+        ".kiro/steering/ (workspace) — or run with --consolidate to merge near-duplicates.",
+      ];
+    case "agents":
+      return [
+        "add the block to your AGENTS.md — kiro and other agent CLIs auto-inherit it.",
+        "or run with --consolidate to merge near-duplicates with one runner call.",
+      ];
+    default:
+      return [
+        "paste the block into your CLAUDE.md — or run with --consolidate",
+        "to merge near-duplicates with one runner call.",
+      ];
+  }
 }
 
 export default defineCommand({
@@ -145,6 +184,11 @@ export default defineCommand({
   },
   args: {
     ...sharedArgs,
+    target: {
+      type: "string",
+      description:
+        "Output target: claude (CLAUDE.md), kiro (steering file), or agents (AGENTS.md). Default: inferred from --source",
+    },
     consolidate: {
       type: "boolean",
       description: "Merge semantic duplicates with one runner call (consent-gated)",
