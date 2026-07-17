@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineCommand } from "citty";
-import { discoverProjects } from "../core/discover.js";
 import { type LibraryIssue, readLibrary, readLibraryIssues } from "../core/library.js";
 import { loadDigests, loadTasks, summarizeOutcomes } from "../distill/pipeline.js";
+import { countOrphanHistories } from "../sources/kiro/discover.js";
+import { parseSourceMode, resolveSources, type SourceMode } from "../sources/registry.js";
 import { bold, dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import type { ManifestEntry } from "./distill.js";
@@ -39,16 +40,33 @@ function renderStaleDigests(keys: string[]): string[] {
 }
 
 /** Build the status report: the funnel, per-task marks, orphans, skipped tasks. */
-export function renderStatus(opts: { home: string; claudeDir: string }): string {
+export function renderStatus(opts: {
+  home: string;
+  claudeDir: string;
+  kiroDir?: string;
+  source?: SourceMode;
+}): string {
   const lines: string[] = [];
 
-  // discovered — tolerate a missing claude dir entirely.
+  // discovered — sum over every active backend; tolerate missing stores. With
+  // two active stores the line gains a per-source breakdown.
   let discovered: number | null = null;
+  let discoveredBreakdown = "";
+  let orphanHistories = 0;
   try {
-    discovered = discoverProjects(opts.claudeDir, { countEntries: false }).reduce(
-      (n, p) => n + p.sessions.length,
-      0,
-    );
+    const mode = opts.source ?? "auto";
+    const kiroDir = opts.kiroDir ?? path.join(process.env.HOME ?? "", ".kiro");
+    const sources = resolveSources(mode, { claudeDir: opts.claudeDir, kiroDir });
+    const bySource = sources.map((src) => ({
+      name: src.name,
+      count: src.discover({ countEntries: false }).reduce((m, p) => m + p.sessions.length, 0),
+    }));
+    discovered = bySource.reduce((n, s) => n + s.count, 0);
+    if (bySource.length > 1) {
+      discoveredBreakdown = ` (${bySource.map((s) => `${s.count} ${s.name}`).join(", ")})`;
+    }
+    // Orphan .history files: human sessions whose transcript was deleted.
+    if (mode !== "claude") orphanHistories = countOrphanHistories(kiroDir);
   } catch {
     discovered = null;
   }
@@ -81,7 +99,16 @@ export function renderStatus(opts: { home: string; claudeDir: string }): string 
       : [];
 
   lines.push(
-    `discovered  ${bold(String(discovered ?? "?"))} session(s)${discovered === null ? " (claude dir not found)" : ""}`,
+    `discovered  ${bold(String(discovered ?? "?"))} session(s)${discovered === null ? " (store scan failed)" : discoveredBreakdown}`,
+  );
+  if (orphanHistories > 0) {
+    lines.push(
+      dim(
+        `  ${orphanHistories} kiro session(s) whose transcript is gone (orphan .history) — not counted`,
+      ),
+    );
+  }
+  lines.push(
     `exported    ${bold(String(exported))} session(s)`,
     `digested    ${bold(String(digested))} session(s)${digests ? dim(`  (generation ${digests.generation})`) : ""}`,
   );
@@ -164,7 +191,9 @@ export default defineCommand({
   },
   args: { ...sharedArgs },
   run({ args }) {
-    const { home, claudeDir } = resolvePaths(args);
-    console.log(renderStatus({ home, claudeDir }));
+    const { home, claudeDir, kiroDir } = resolvePaths(args);
+    console.log(
+      renderStatus({ home, claudeDir, kiroDir, source: parseSourceMode(args.source as string) }),
+    );
   },
 });

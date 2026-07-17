@@ -176,7 +176,9 @@ describe("renderStatus", () => {
 
   it("renders the early funnel with hints before anything is distilled", () => {
     const home = tmpHome();
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("discovered  0 session(s)");
     expect(out).toContain("exported    0 session(s)");
     expect(out).toContain("clustered   —");
@@ -226,7 +228,9 @@ describe("renderStatus", () => {
     writeEntry(home, "authored-task-here", { generation: "g2" });
     writeEntry(home, "orphaned-task-here", { generation: "g1" }); // stale generation
 
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("exported    3 session(s)");
     expect(out).toContain("digested    3 session(s)");
     expect(out).toContain("clustered   3 task(s), 0 in misc");
@@ -255,7 +259,9 @@ describe("renderStatus", () => {
         digests: { "a.md": digest, "ghost.md": digest },
       }),
     );
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     expect(out).toContain("1 digested session(s) no longer in the manifest");
     expect(out).toContain("⚠ ghost.md");
   });
@@ -289,12 +295,47 @@ describe("renderStatus", () => {
     writeEntry(home, "kept-task-here", { generation: "g2" });
     writeEntry(home, "merged-away-task", { generation: "g2" });
 
-    const out = strip(renderStatus({ home, claudeDir: path.join(home, "no-claude") }));
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
     // Zombie is NOT counted as authored (1 of 1, not 2 of 1).
     expect(out).toContain("authored    1 of 1 task(s)");
     expect(out).toContain("✓ kept-task-here");
     // ...and IS flagged as an orphan despite the matching generation.
     expect(out).toContain("1 orphaned library entry");
     expect(out).toContain("⚠ merged-away-task");
+  });
+});
+
+// ---- status: dual-store discovered breakdown --------------------------------
+
+describe("renderStatus — per-source discovered breakdown", () => {
+  const FIXTURES = path.join(import.meta.dirname, "fixtures");
+
+  it("shows (N claude, M kiro) when both stores are active, plus the orphan-history note", () => {
+    const home = tmpHome();
+    const out = renderStatus({
+      home,
+      claudeDir: path.join(FIXTURES, "export-home"),
+      kiroDir: path.join(FIXTURES, "kiro-home"),
+      source: "auto",
+    });
+    // export-home holds 4 claude sessions (alpha + beta); kiro-home holds 5 transcripts.
+    expect(out).toContain("discovered");
+    expect(out).toContain("(4 claude, 5 kiro)");
+    // The orphan .history in kiro-home is surfaced here too.
+    expect(out).toContain("1 kiro session(s) whose transcript is gone");
+  });
+
+  it("shows no breakdown when a single store is active", () => {
+    const home = tmpHome();
+    const out = renderStatus({
+      home,
+      claudeDir: path.join(FIXTURES, "export-home"),
+      kiroDir: path.join(FIXTURES, "does-not-exist"),
+      source: "auto",
+    });
+    expect(out).not.toContain("claude,");
+    expect(out).not.toContain("kiro)");
   });
 });

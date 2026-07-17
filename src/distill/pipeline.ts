@@ -253,6 +253,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
             exportName: entry.export,
             content,
             outcome: outcomes[entry.export],
+            origin: entry.origin,
           }),
           schema: DigestSchema,
           model: opts.model,
@@ -466,6 +467,8 @@ export interface ClusterStageOptions {
   home: string;
   /** Digests for the CURRENT eligible sessions (input to the clusterer). */
   digests: Record<string, Digest>;
+  /** Backend per export name (absent entries ⇒ claude) — names the corpus in the prompt. */
+  origins?: Record<string, "claude" | "kiro">;
   generation: string;
   noGroup?: boolean;
   model?: string;
@@ -522,7 +525,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     );
   } else {
     write(`  clustering ${inputIds.length} digest(s)…`);
-    const basePrompt = buildClusterPrompt(opts.digests);
+    const basePrompt = buildClusterPrompt(opts.digests, opts.origins);
     // Cluster is a single call over ALL digests; warn (don't block) if the set
     // is large enough to risk a context rejection (the eventual answer is
     // windowed clustering — a roadmap item).
@@ -681,7 +684,7 @@ function provenanceComment(sources: SourcesJson): string {
     `  task: ${sources.slug} (generation ${sources.generation})`,
     `  sources: ${sources.members.join(", ")}`,
     `  outcomes: ${sources.outcome_summary}; confidence: ${sources.confidence}`,
-    `  model: ${sources.model ?? "claude CLI default"}; prompt v${sources.prompt_version}; ${sources.authored_at}`,
+    `  model: ${sources.model ?? "runner default"}; prompt v${sources.prompt_version}; ${sources.authored_at}`,
     "-->",
   ].join("\n");
 }
@@ -702,6 +705,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
 
   const anaphora = readAnaphora(opts.home);
   const sessionIdByExport = new Map(opts.entries.map((e) => [e.export, e.sessionId]));
+  const originByExport = new Map(opts.entries.map((e) => [e.export, e.origin ?? "claude"]));
 
   const result: AuthorStageResult = {
     generation: opts.generation,
@@ -784,7 +788,13 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     for (const m of task.members) {
       try {
         const content = fs.readFileSync(path.join(opts.home, "exports", m), "utf8");
-        members.push({ exportName: m, content, digest: opts.digests[m], anaphora: anaphora[m] });
+        members.push({
+          exportName: m,
+          content,
+          digest: opts.digests[m],
+          anaphora: anaphora[m],
+          origin: originByExport.get(m),
+        });
       } catch {
         unreadableMember = m;
         break;

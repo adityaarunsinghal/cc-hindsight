@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCorpus, type CorpusSession } from "../src/core/dedupe.js";
+import { extractMessages, extractTimeline } from "../src/core/extract.js";
 import { buildOutcome, FINAL_TURNS, OUTCOME_NOTE, TAIL_CHARS } from "../src/core/outcome.js";
 
 function userLine(timestamp: string, text: string): string {
@@ -30,7 +31,9 @@ const T4 = "2026-02-01T00:04:00.000Z";
 const T5 = "2026-02-01T00:05:00.000Z";
 
 function sessionOf(lines: string[]): CorpusSession {
-  const corpus = buildCorpus([{ project: "p", sessionId: "s", sourcePath: "/s", lines }]);
+  const corpus = buildCorpus([
+    { project: "p", sessionId: "s", sourcePath: "/s", extracted: extractMessages(lines) },
+  ]);
   const session = corpus.sessions[0];
   if (!session) throw new Error("no session built");
   return session;
@@ -75,7 +78,7 @@ describe("outcome — final_assistant_tail", () => {
       userLine(T2, "go"),
       assistantText(T3, big),
     ];
-    const outcome = buildOutcome(sessionOf(lines), lines);
+    const outcome = buildOutcome(sessionOf(lines), extractTimeline(lines));
     expect(outcome.final_assistant_tail.length).toBe(TAIL_CHARS);
     expect(outcome.final_assistant_tail.endsWith("TAIL_MARK")).toBe(true);
     expect(outcome.final_assistant_tail.includes("HEAD_MARK")).toBe(false);
@@ -87,13 +90,13 @@ describe("outcome — final_assistant_tail", () => {
       userLine(T2, "go"),
       assistantText(T3, "LAST assistant"),
     ];
-    const outcome = buildOutcome(sessionOf(lines), lines);
+    const outcome = buildOutcome(sessionOf(lines), extractTimeline(lines));
     expect(outcome.final_assistant_tail).toBe("LAST assistant");
   });
 
   it("is '' when the session has no assistant text turn", () => {
     const lines = [userLine(T1, "hello"), userLine(T2, "there")];
-    const outcome = buildOutcome(sessionOf(lines), lines);
+    const outcome = buildOutcome(sessionOf(lines), extractTimeline(lines));
     expect(outcome.final_assistant_tail).toBe("");
   });
 
@@ -103,7 +106,7 @@ describe("outcome — final_assistant_tail", () => {
       sidechainAssistant(T5, "SIDECHAIN must not surface"),
       userLine(T5, "ok"),
     ];
-    const outcome = buildOutcome(sessionOf(lines), lines);
+    const outcome = buildOutcome(sessionOf(lines), extractTimeline(lines));
     expect(outcome.final_assistant_tail).toBe("REAL final assistant");
   });
 });

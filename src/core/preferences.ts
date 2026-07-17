@@ -78,21 +78,52 @@ export function aggregatePreferences(entries: LibraryEntry[]): AggregatedPrefere
   );
 }
 
+/** Where a preferences block is destined to be pasted. */
+export type PreferencesTarget = "claude" | "kiro" | "agents";
+
+/** Per-target leading comment + section heading. */
+function targetHeader(
+  target: PreferencesTarget,
+  date: string,
+): { comment: string; heading: string } {
+  switch (target) {
+    case "kiro":
+      // A kiro steering file (~/.kiro/steering/*.md) — auto-loaded by the agent.
+      return {
+        comment: `<!-- cc-hindsight preferences · generated ${date} · paste into ~/.kiro/steering/hindsight-preferences.md -->`,
+        heading: "## Working preferences",
+      };
+    case "agents":
+      // An AGENTS.md section — portable across kiro and other agent CLIs.
+      return {
+        comment: `<!-- cc-hindsight preferences · generated ${date} · add to AGENTS.md -->`,
+        heading: "## Working preferences",
+      };
+    default:
+      // claude: the original CLAUDE.md block — byte-identical to before.
+      return {
+        comment: `<!-- cc-hindsight preferences · generated ${date} -->`,
+        heading: "## Working preferences",
+      };
+  }
+}
+
 /**
- * Render the paste-ready `CLAUDE.md` block. Preferences are grouped by how
- * many tasks stated them, one comment header per group (most-stated first) —
- * repeating the count on every line drowned the signal when most items occur
- * once. Consolidated items (no per-task occurrences) render as a flat list.
+ * Render the paste-ready preferences block for a given target. Preferences are
+ * grouped by how many tasks stated them, one comment header per group
+ * (most-stated first) — repeating the count on every line drowned the signal
+ * when most items occur once. Consolidated items (no per-task occurrences)
+ * render as a flat list. The BODY is identical across targets; only the leading
+ * provenance comment names the destination file.
  */
-export function renderClaudeMdBlock(
+export function renderPreferencesBlock(
   prefs: AggregatedPreference[],
   taskCount: number,
+  target: PreferencesTarget = "claude",
   now = new Date(),
 ): string {
-  const lines = [
-    `<!-- cc-hindsight preferences · generated ${now.toISOString().slice(0, 10)} -->`,
-    "## Working preferences",
-  ];
+  const { comment, heading } = targetHeader(target, now.toISOString().slice(0, 10));
+  const lines = [comment, heading];
   const grouped = taskCount > 1 && prefs.every((p) => p.occurrences.length > 0);
   let currentCount: number | null = null;
   for (const p of prefs) {
@@ -105,4 +136,17 @@ export function renderClaudeMdBlock(
     lines.push(`- ${p.text}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * The original `CLAUDE.md` block. Kept as a thin, byte-identical wrapper over
+ * {@link renderPreferencesBlock} with the claude target, for existing callers.
+ * @deprecated Prefer `renderPreferencesBlock(prefs, taskCount, target, now)`.
+ */
+export function renderClaudeMdBlock(
+  prefs: AggregatedPreference[],
+  taskCount: number,
+  now = new Date(),
+): string {
+  return renderPreferencesBlock(prefs, taskCount, "claude", now);
 }

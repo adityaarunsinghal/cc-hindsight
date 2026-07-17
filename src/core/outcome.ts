@@ -16,9 +16,9 @@
  * `_note` written alongside the data (see the export command) states this.
  */
 
+import type { TimelineEvent } from "../sources/types.js";
 import { TAIL_CHARS } from "./anaphora.js";
 import type { CorpusSession } from "./dedupe.js";
-import { extractTimeline } from "./extract.js";
 
 // TAIL_CHARS originates with the anaphora tail bound; re-export it so outcome
 // tests can import the single source of truth from here too.
@@ -49,14 +49,13 @@ export interface OutcomeEvidence {
  *
  * `final_human_turns` come from the session's post-dedupe survivors (so they are
  * exactly what the export shows); `final_assistant_tail` is recovered from the
- * raw timeline (assistant text is not part of the export corpus). Both are
+ * session `timeline` (assistant text is not part of the export corpus). Both are
  * bounded: at most {@link FINAL_TURNS} human turns and {@link TAIL_CHARS} chars.
  */
-export function buildOutcome(session: CorpusSession, lines: string[]): OutcomeEvidence {
+export function buildOutcome(session: CorpusSession, timeline: TimelineEvent[]): OutcomeEvidence {
   const final_human_turns = session.messages.slice(-FINAL_TURNS).map((message) => message.text);
 
   let final_assistant_tail = "";
-  const timeline = extractTimeline(lines);
   for (let i = timeline.length - 1; i >= 0; i--) {
     const event = timeline[i];
     if (event?.kind === "assistant") {

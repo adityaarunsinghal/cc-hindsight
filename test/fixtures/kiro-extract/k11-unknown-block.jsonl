@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"look at this screenshot"},{"kind":"image","data":{"format":"png","bytes":"..."}},{"kind":"hologram","data":"future block kind"}],"meta":{"timestamp":1784000000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[{"kind":"text","data":"Looking."}]}}
