@@ -337,6 +337,17 @@ function reportExport(
       `${stats.duplicatesDropped} duplicates dropped) → ${stats.exportsDir}`,
   );
 
+  // Merged-corpus notice (§ accepted-risk register): `--source auto` silently
+  // widens a dual-tool user's default corpus — say so once, with the escape.
+  if (origins.length > 1) {
+    write(
+      dim(
+        `  including ${stats.sessionsByOrigin.kiro ?? 0} kiro session(s); ` +
+          "use --source claude to restore the claude-only scope",
+      ),
+    );
+  }
+
   // Anaphora + outcome accounting.
   write(
     `${stats.shortTurns} short turns attached ` +

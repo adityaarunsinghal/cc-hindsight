@@ -450,22 +450,25 @@ describe("export — kiro source", () => {
     const { sink, text } = makeSink();
     const stats = runExport({ home, "kiro-dir": KIRO_HOME, source: "kiro", output: sink });
 
-    // Only the two .history (interactive) sessions export; the [AGENT SYSTEM
-    // PROMPT] automation session and the parent-linked child are classified out.
-    expect(stats.exportedSessions).toBe(2);
+    // The three .history (interactive) sessions export — including the HYBRID
+    // parent-linked one a human steered (K2 step-1 precedence); the [AGENT
+    // SYSTEM PROMPT] automation session and the parent-linked child without
+    // history are classified out.
+    expect(stats.exportedSessions).toBe(3);
     expect(stats.automationSkipped).toBe(2);
-    expect(stats.sessionsByOrigin).toEqual({ kiro: 2 });
+    expect(stats.sessionsByOrigin).toEqual({ kiro: 3 });
 
     const manifest = readManifest(home);
-    expect(manifest.length).toBe(2);
+    expect(manifest.length).toBe(3);
     for (const e of manifest) expect(e.origin).toBe("kiro");
     // The dark-mode session's first prompt survived to the export markdown.
     const md = fs.readFileSync(path.join(home, "exports", manifest[0]?.export ?? ""), "utf8");
     expect(md).toContain("###"); // has at least one timestamped block
-    void text;
+    // Single-source run: no merged-corpus notice.
+    expect(text()).not.toContain("including");
   });
 
-  it("merges claude + kiro under --source auto with a per-origin breakdown", () => {
+  it("merges claude + kiro under --source auto with a per-origin breakdown and a one-time notice", () => {
     const home = freshHome();
     const { sink, text } = makeSink();
     const stats = runExport({
@@ -475,10 +478,32 @@ describe("export — kiro source", () => {
       source: "auto",
       output: sink,
     });
-    // 3 claude (export-home alpha) + 2 interactive kiro.
-    expect(stats.sessionsByOrigin).toEqual({ claude: 3, kiro: 2 });
-    expect(text()).toContain("3 claude + 2 kiro;");
+    // 3 claude (export-home alpha) + 3 interactive kiro.
+    expect(stats.sessionsByOrigin).toEqual({ claude: 3, kiro: 3 });
+    expect(text()).toContain("3 claude + 3 kiro;");
+    // The merged-corpus notice names the kiro count and the escape hatch.
+    expect(text()).toContain("including 3 kiro session(s)");
+    expect(text()).toContain("--source claude");
     const origins = new Set(readManifest(home).map((e) => e.origin));
     expect([...origins].sort()).toEqual(["claude", "kiro"]);
+  });
+
+  it("dedupes a /chat load-imported copy: the original owns the shared keys", () => {
+    // kiro-home-dedupe: s-restored was created by `/chat load` from s-original —
+    // a NEW uuid with the log entries copied verbatim (imported_from set) plus
+    // one new human prompt. The copied (timestamp, text) pairs must be dropped
+    // as fork copies; the new prompt survives in the restored session.
+    const home = freshHome();
+    const { sink } = makeSink();
+    const DEDUPE_HOME = path.join(import.meta.dirname, "fixtures", "kiro-home-dedupe");
+    const stats = runExport({ home, "kiro-dir": DEDUPE_HOME, source: "kiro", output: sink });
+
+    expect(stats.exportedSessions).toBe(2);
+    expect(stats.duplicatesDropped).toBe(2); // both copied prompts dropped once
+    const manifest = readManifest(home);
+    const original = manifest.find((e) => e.sessionId === "s-original");
+    const restored = manifest.find((e) => e.sessionId === "s-restored");
+    expect(original?.messages).toBe(2); // owns both shared keys
+    expect(restored?.messages).toBe(1); // keeps only its genuinely new prompt
   });
 });

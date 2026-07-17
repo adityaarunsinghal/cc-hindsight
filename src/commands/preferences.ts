@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
 import { askYesNo } from "../claude/consent.js";
@@ -11,6 +12,7 @@ import {
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
+import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import { withSpinner } from "../ui/progress.js";
 import { cyan, dim, green, hint } from "../ui/style.js";
@@ -89,13 +91,22 @@ export async function runPreferences(
 
   // --consolidate: one runner call, behind the same consent gate as distill.
   // Route through resolveRunner so a kiro-only machine works (and the copy names
-  // whichever CLI will actually run); an injected deps.runner (tests) bypasses it.
+  // whichever CLI will actually run); an explicit --runner with a missing
+  // binary fails HERE, before the consent prompt. An injected deps.runner
+  // (tests) bypasses it.
   const sourceMode = parseSourceMode(args.source);
-  const resolved = deps.runner
-    ? null
-    : await resolveRunner(parseRunnerMode(args.runner), {
+  let resolved: AgentRunner | null = null;
+  if (!deps.runner) {
+    try {
+      resolved = await resolveRunner(parseRunnerMode(args.runner), {
         preferSource: sourceMode === "auto" ? undefined : sourceMode,
+        scratchBase: path.join(home, "runner-scratch"),
       });
+    } catch (err) {
+      write((err as Error).message);
+      return 1;
+    }
+  }
   const cli = resolved?.name === "kiro" ? "kiro-cli" : "claude";
   const cost = resolved?.name === "kiro" ? "your Kiro credits" : "your subscription/credits";
   write(`consolidate will invoke your local \`${cli}\` CLI once (${cost}).`);
@@ -124,8 +135,11 @@ export async function runPreferences(
     write(dim("falling back to the unconsolidated block; retry with --model <model>."));
     write();
     write(renderPreferencesBlock(prefs, entries.length, target));
+    await resolved?.finalize?.();
     return 1;
   }
+  // Once-per-run teardown (kiro: delete this run's auto-saved session).
+  await resolved?.finalize?.();
 
   const merged: AggregatedPreference[] = consolidated.preferences.map((p) => ({
     text: p.text,
@@ -180,7 +194,7 @@ function targetFooter(target: PreferencesTarget): string[] {
 export default defineCommand({
   meta: {
     name: "preferences",
-    description: "Aggregate recurring preferences into a CLAUDE.md snippet",
+    description: "Aggregate recurring preferences into a CLAUDE.md / steering / AGENTS.md block",
   },
   args: {
     ...sharedArgs,

@@ -22,6 +22,7 @@ import {
   runDigestStage,
 } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
+import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
@@ -271,16 +272,33 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   // Resolve which local CLI distills. Default `auto`: prefer the runner matching
   // the active source, else fall back by binary availability. A kiro-only
-  // machine (no `claude` binary) works out of the box. An injected deps.runner
-  // (tests) bypasses resolution and leaves the consent copy at its claude default.
-  const resolvedRunner = deps.runner
-    ? null
-    : await resolveRunner(parseRunnerMode(args.runner), {
+  // machine (no `claude` binary) works out of the box. An EXPLICIT --runner
+  // whose binary is missing fails here — before consent — with its install
+  // hint. An injected deps.runner (tests) bypasses resolution and leaves the
+  // consent copy at its claude default.
+  let resolvedRunner: AgentRunner | null = null;
+  if (!deps.runner) {
+    try {
+      resolvedRunner = await resolveRunner(parseRunnerMode(args.runner), {
         preferSource: sourceMode === "auto" ? undefined : sourceMode,
+        scratchBase: path.join(home, "runner-scratch"),
       });
-  const runner: RunnerFn =
-    deps.runner ?? (resolvedRunner as NonNullable<typeof resolvedRunner>).run;
+    } catch (err) {
+      write((err as Error).message);
+      return 1;
+    }
+  }
+  const runner: RunnerFn = deps.runner ?? (resolvedRunner as AgentRunner).run;
   const runnerName: DistillPlan["runnerName"] = resolvedRunner?.name;
+
+  // Once-per-run runner teardown, called at every terminal point AFTER stage
+  // calls began: all concurrent workers have joined by then, so the kiro
+  // runner's session cleanup can never race an in-flight sibling (deletion
+  // happens once per run, per the scope invariant). Best-effort by contract.
+  const finishRun = async (code: number): Promise<number> => {
+    await resolvedRunner?.finalize?.();
+    return code;
+  };
 
   // Consent-time (pre-spend) overflow estimate.
   const oversized = computeOversized(home, plan.eligible, budget);
@@ -432,7 +450,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   if (Object.keys(digestsForCluster).length === 0) {
     write();
     write("no sessions were successfully digested; nothing to cluster.");
-    return 1;
+    return finishRun(1);
   }
 
   // Track whether ANY failure occurred so the command exits non-zero after
@@ -443,9 +461,14 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
 
   try {
+    // Backend per export (absent ⇒ claude): names the corpus in the cluster
+    // prompt (named single-source, neutral for merged corpora).
+    const clusterOrigins: Record<string, SourceName> = {};
+    for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
     const clusterResult = await runClusterStage({
       home,
       digests: digestsForCluster,
+      origins: clusterOrigins,
       generation: digestResult.generation,
       noGroup,
       model: args.model,
@@ -501,6 +524,12 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       hadFailure = true;
     }
 
+    // Best-effort cost visibility (kiro prints a Credits footer per call).
+    const costLine = resolvedRunner?.costSummary?.();
+    if (costLine) {
+      write(dim(costLine));
+    }
+
     // Offer to show the freshly-built library — the payoff of the one-shot flow
     // is watching it appear. Pure local display (no cost), so the default is
     // yes; --yes shows it without prompting; a pipe/CI without --yes just skips.
@@ -526,20 +555,20 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           );
           write(hint("cc-hindsight show <slug>"));
           write(hint("cc-hindsight copy <slug>"));
-          return hadFailure ? 1 : 0;
+          return finishRun(hadFailure ? 1 : 0);
         }
       }
     }
   } catch (err) {
     write(`  ✗ ${(err as Error).message}`);
     write("  digest progress is checkpointed; re-run to retry clustering.");
-    return 1;
+    return finishRun(1);
   }
 
   write(hint("cc-hindsight list"));
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
-  return hadFailure ? 1 : 0;
+  return finishRun(hadFailure ? 1 : 0);
 }
 
 export default defineCommand({
@@ -570,7 +599,7 @@ export default defineCommand({
     yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
     "input-budget": {
       type: "string",
-      description: "Max characters of session content per claude call (default 400000)",
+      description: "Max characters of session content per runner call (default 400000)",
     },
     truncate: {
       type: "string",
@@ -579,7 +608,7 @@ export default defineCommand({
     },
     timeout: {
       type: "string",
-      description: "Per-claude-call timeout in seconds (default 300)",
+      description: "Per-runner-call timeout in seconds (default 300)",
     },
     concurrency: {
       type: "string",
