@@ -346,7 +346,7 @@ describe("runDistill", () => {
     );
     expect(code).toBe(0);
     expect(captured).toMatchObject({ digests: 2, cluster: 1, authorEstimate: 1 });
-    expect(cap.text()).toContain("digest — 2 session(s):");
+    expect(cap.text()).toMatch(/── digest ─+ 2 session\(s\):/);
   });
 
   it("exits 2 when consent is declined", async () => {

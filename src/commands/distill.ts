@@ -26,7 +26,7 @@ import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
-import { bold, cyan, dim, green, hint } from "../ui/style.js";
+import { banner, bold, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
 
@@ -312,7 +312,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       `${oversized.length} session(s) exceed the input budget (${budget} chars); nothing was invoked:`,
     );
     for (const o of oversized) {
-      write(`  ⤬ ${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`);
+      write(`  ${skip(`${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`)}`);
     }
     write(
       dim(
@@ -360,13 +360,15 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   if (decision === "dry-run") {
     write();
-    write(`${bold("digest")} — ${plan.eligible.length} session(s):`);
+    write(`${banner("digest", `${plan.eligible.length} session(s)`)}:`);
     for (const e of plan.eligible) {
       write(`  ${dim("•")} ${cyan(e.export)} ${dim(`(${e.messages} msgs)`)}`);
     }
-    write(`${bold("cluster")} — ${plan.cluster} call${noGroup ? " (skipped: --no-group)" : ""}.`);
     write(
-      `${bold("author")}  — ~${plan.authorEstimate} task(s) (exact count known after clustering).`,
+      `${banner("cluster", `${plan.cluster} call${noGroup ? " (skipped: --no-group)" : ""}`)}.`,
+    );
+    write(
+      `${banner("author", `~${plan.authorEstimate} task(s)`)} ${dim("(exact count known after clustering)")}.`,
     );
     if (oversized.length > 0) {
       const verb =
@@ -374,9 +376,11 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           ? "cut middle-out"
           : "BLOCKED (re-run with --truncate=extreme or --input-budget)";
       write();
-      write(`${bold("budget")}  — ${oversized.length} session(s) over ${budget} chars → ${verb}:`);
+      write(
+        `${banner("budget", `${oversized.length} session(s) over ${budget} chars → ${verb}`)}:`,
+      );
       for (const o of oversized) {
-        write(`  ${dim("⤬")} ${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`);
+        write(`  ${skip(`${cyan(o.export)} ${dim(`(${o.chars} chars)`)}`)}`);
       }
     }
     return 0;
@@ -395,7 +399,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   // proceed — stage 1: digest
   write();
-  write(`digest — ${plan.digests} session(s):`);
+  write(`${banner("digest", `${plan.digests} session(s)`)}:`);
   const digestResult = await runDigestStage({
     home,
     entries: plan.eligible,
@@ -409,17 +413,17 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   });
 
   const doneTotal = digestResult.completed + digestResult.skipped;
-  write(
+  const digestSummary =
     `digest stage: ${doneTotal}/${plan.digests} done` +
-      (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
-      (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : ""),
-  );
+    (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
+    (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : "");
+  write(digestResult.failed.length ? digestSummary : green(digestSummary));
 
   if (digestResult.failed.length > 0) {
     write();
     write("failed sessions (progress is checkpointed; re-run to retry):");
     for (const f of digestResult.failed) {
-      write(`  ✗ ${f.export}: ${f.error}`);
+      write(`  ${fail(`${f.export}: ${f.error}`)}`);
     }
     // Do NOT abort here. A reproducibly-failing session must not block the
     // whole pipeline forever — proceed to cluster/author with the digests that
@@ -433,7 +437,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       `blocked ${digestResult.blocked.length} session(s) exceeding the input budget (${budget} chars):`,
     );
     for (const b of digestResult.blocked) {
-      write(`  ⤬ ${b.export}: ${b.chars} chars`);
+      write(`  ${skip(`${b.export}: ${b.chars} chars`)}`);
     }
     write(dim("  re-run with --truncate=extreme to cut them, or raise --input-budget."));
   }
@@ -458,7 +462,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
 
   write();
-  write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
+  write(`${banner("cluster", noGroup ? "--no-group" : "1 call")}:`);
 
   try {
     // Backend per export (absent ⇒ claude): names the corpus in the cluster
@@ -481,9 +485,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
     }
 
-    // stage 3: author — one call per viable task; the library IS the checkpoint.
+    // stage 3: author (one call per viable task; the library IS the checkpoint)
     write();
-    write(`author — ${clusterResult.tasks.length} task(s):`);
+    write(`${banner("author", `${clusterResult.tasks.length} task(s)`)}:`);
     const authorResult = await runAuthorStage({
       home,
       tasks: clusterResult.tasks,
@@ -503,14 +507,14 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
     write();
     const authoredTotal = authorResult.authored.length + authorResult.resumed.length;
-    write(
+    const librarySummary =
       `library: ${authoredTotal} entr${authoredTotal === 1 ? "y" : "ies"} authored` +
-        (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
-        (authorResult.skipped.length
-          ? `, ${authorResult.skipped.length} task(s) skipped (no successful sessions)`
-          : "") +
-        (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : ""),
-    );
+      (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
+      (authorResult.skipped.length
+        ? `, ${authorResult.skipped.length} task(s) skipped (no successful sessions)`
+        : "") +
+      (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : "");
+    write(authoredTotal > 0 ? green(librarySummary) : librarySummary);
     for (const s of authorResult.skipped) {
       write(`  · skipped ${s.slug}: ${s.reason}`);
     }
@@ -519,7 +523,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       write();
       write("failed tasks (authored entries are kept; re-run to retry):");
       for (const f of authorResult.failed) {
-        write(`  ✗ ${f.export}: ${f.error}`);
+        write(`  ${fail(`${f.export}: ${f.error}`)}`);
       }
       hadFailure = true;
     }
@@ -560,7 +564,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       }
     }
   } catch (err) {
-    write(`  ✗ ${(err as Error).message}`);
+    write(`  ${fail((err as Error).message)}`);
     write("  digest progress is checkpointed; re-run to retry clustering.");
     return finishRun(1);
   }

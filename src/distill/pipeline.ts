@@ -27,6 +27,7 @@ import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { oneshotHash } from "../core/library.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
 import { withSpinner } from "../ui/progress.js";
+import { fail, green, skip as skipGlyph } from "../ui/style.js";
 
 /**
  * distill/pipeline.ts — stage orchestration, checkpoints, generations.
@@ -226,7 +227,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         export: entry.export,
         error: `could not read export: ${(err as Error).message}`,
       });
-      write(`  ${label} — ✗ unreadable export`);
+      write(`  ${label} — ${fail("unreadable export")}`);
       return;
     }
 
@@ -235,7 +236,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       if (truncatePolicy === "never") {
         blocked.push({ export: entry.export, chars: content.length });
         write(
-          `  ${label} — ⤬ blocked: ${content.length} chars exceed the input budget (${budget}). ` +
+          `  ${label} — ${skipGlyph(`blocked: ${content.length} chars exceed the input budget (${budget}).`)} ` +
             "Re-run with --truncate=extreme or a larger --input-budget.",
         );
         return; // pre-spend block — no claude call
@@ -268,11 +269,11 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       checkpoint.digests[entry.export] = digest;
       saveDigests(opts.home, checkpoint); // after each — Ctrl-C safe
       completed++;
-      write(`  ${label} → ${digest.outcome}: ${truncate(digest.goal, 70)}`);
+      write(`  ${label} → ${green(digest.outcome)}: ${truncate(digest.goal, 70)}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failed.push({ export: entry.export, error: message });
-      write(`  ${label} ✗ failed: ${truncate(message, 120)}`);
+      write(`  ${label} ${fail(`failed: ${truncate(message, 120)}`)}`);
       // continue — one failure doesn't abort the rest
     }
   };
@@ -808,7 +809,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         export: task.slug,
         error: `member export unreadable: ${unreadableMember}`,
       });
-      write(`  ${label} — ✗ member export unreadable: ${unreadableMember}`);
+      write(`  ${label} — ${fail(`member export unreadable: ${unreadableMember}`)}`);
       return;
     }
 
@@ -829,7 +830,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
             `budget (${budget}). Re-run with --truncate=extreme or a larger --input-budget.`,
         });
         write(
-          `  ${label} — ⤬ blocked: ${totalChars} chars exceed the input budget (${budget}). ` +
+          `  ${label} — ${skipGlyph(`blocked: ${totalChars} chars exceed the input budget (${budget}).`)} ` +
             "Re-run with --truncate=extreme or a larger --input-budget.",
         );
         return; // pre-spend block
@@ -909,7 +910,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result.failed.push({ export: task.slug, error: message });
-      write(`      ✗ failed: ${truncate(message, 120)}`);
+      write(`      ${fail(`failed: ${truncate(message, 120)}`)}`);
       // one task's failure doesn't abort the rest
     }
   };
