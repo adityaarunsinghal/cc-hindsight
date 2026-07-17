@@ -31,5 +31,7 @@ jobs:
       - run: npm run build
       # Package hygiene: the tarball must contain dist + the standard metadata
       # files and NOTHING else (no src/, test/, fixtures, or config).
-      - run: npm pack --dry-run --json > pack.json
+      # --ignore-scripts: dist is already built above; without it, the `prepare`
+      # lifecycle re-runs the build and its banner contaminates the JSON capture.
+      - run: npm pack --dry-run --json --ignore-scripts > pack.json
       - run: node scripts/check-pack.mjs pack.json

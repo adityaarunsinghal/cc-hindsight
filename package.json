@@ -40,7 +40,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && npm pack --dry-run --json > pack.json && node scripts/check-pack.mjs pack.json && rm pack.json"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && npm pack --dry-run --json --ignore-scripts > pack.json && node scripts/check-pack.mjs pack.json && rm pack.json"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",
