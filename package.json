@@ -35,6 +35,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "prepare": "npm run build",
     "test": "vitest run",
     "lint": "biome check .",
     "format": "biome format --write .",
