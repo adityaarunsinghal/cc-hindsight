@@ -118,13 +118,50 @@ export async function runPreferences(
   }
 
   const runner: RunnerFn = deps.runner ?? (resolved as NonNullable<typeof resolved>).run;
+  const { merged } = await runConsolidation({
+    prefs,
+    taskCount: entries.length,
+    target,
+    runner,
+    model: args.model,
+    output: out,
+  });
+  // Once-per-run teardown (kiro: delete this run's auto-saved session). Called
+  // in both paths; finalize is idempotent-once-per-run and emits no output, so
+  // moving it past the rendering keeps the byte stream identical.
+  await resolved?.finalize?.();
+  return merged === null ? 1 : 0;
+}
+
+/** Result of a consolidation pass; `merged` is null when the runner call failed. */
+export interface ConsolidationOutcome {
+  merged: AggregatedPreference[] | null;
+}
+
+/**
+ * The one-call consolidation + rendering, extracted so callers can reuse it
+ * (and wrap it with a copy offer). Runs the runner once in a spinner; on
+ * failure emits the deterministic unconsolidated block and returns null, on
+ * success renders the merged block. Teardown stays with the caller.
+ */
+export async function runConsolidation(opts: {
+  prefs: AggregatedPreference[];
+  taskCount: number;
+  target: PreferencesTarget;
+  runner: RunnerFn;
+  model?: string;
+  output: Writable;
+}): Promise<ConsolidationOutcome> {
+  const { prefs, taskCount, target, runner, model, output } = opts;
+  const write = (s = "") => output.write(`${s}\n`);
+
   let consolidated: Consolidated;
   try {
-    consolidated = await withSpinner(out, `consolidating ${prefs.length} preference(s)`, () =>
+    consolidated = await withSpinner(output, `consolidating ${prefs.length} preference(s)`, () =>
       runner({
         prompt: buildConsolidatePrompt(prefs),
         schema: ConsolidateSchema,
-        model: args.model,
+        model,
       }),
     );
   } catch (err) {
@@ -134,12 +171,9 @@ export async function runPreferences(
     write(`consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
     write(dim("falling back to the unconsolidated block; retry with --model <model>."));
     write();
-    write(renderPreferencesBlock(prefs, entries.length, target));
-    await resolved?.finalize?.();
-    return 1;
+    write(renderPreferencesBlock(prefs, taskCount, target));
+    return { merged: null };
   }
-  // Once-per-run teardown (kiro: delete this run's auto-saved session).
-  await resolved?.finalize?.();
 
   const merged: AggregatedPreference[] = consolidated.preferences.map((p) => ({
     text: p.text,
@@ -148,10 +182,10 @@ export async function runPreferences(
     lastAuthoredAt: "",
   }));
   write();
-  write(renderPreferencesBlock(merged, entries.length, target));
+  write(renderPreferencesBlock(merged, taskCount, target));
   write();
   write(dim(`consolidated ${prefs.length} → ${merged.length} preference(s).`));
-  return 0;
+  return { merged };
 }
 
 /**
