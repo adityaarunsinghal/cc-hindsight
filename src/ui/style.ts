@@ -106,3 +106,23 @@ export function table(rows: string[][], opts?: { header?: string[]; maxWidth?: n
 export function hint(text: string): string {
   return dim(`→ next: ${text}`);
 }
+
+/** Stage banners are padded to this visible width before the right-hand text. */
+const BANNER_WIDTH = 28;
+
+/**
+ * Stage banner: `── digest ─────────────── 5 sessions`. The label is bold
+ * magenta, the rule dim, the right-hand annotation cyan. Total left width is
+ * fixed so consecutive banners align their right column.
+ */
+export function banner(label: string, right?: string): string {
+  const head = `── ${label} `;
+  const rule = "─".repeat(Math.max(1, BANNER_WIDTH - head.length));
+  const left = `${dim("──")} ${bold(magenta(label))} ${dim(rule)}`;
+  return right === undefined ? left : `${left} ${cyan(right)}`;
+}
+
+/** Status glyphs: colored ✔ / ✗ / ⤬ prefixes for per-item progress lines. */
+export const ok = (s: string): string => `${green("✔")} ${s}`;
+export const fail = (s: string): string => `${red("✗")} ${s}`;
+export const skip = (s: string): string => `${yellow("⤬")} ${s}`;

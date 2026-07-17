@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
-import { hint, table } from "../src/ui/style.js";
+import { banner, fail, hint, ok, skip, table } from "../src/ui/style.js";
 
 describe("table()", () => {
   it("pads columns to the max width per column", () => {
@@ -69,5 +69,32 @@ describe("hint()", () => {
     expect(stripVTControlCharacters(hint("cc-hindsight export"))).toBe(
       "→ next: cc-hindsight export",
     );
+  });
+});
+
+describe("banner()", () => {
+  it("renders label, rule, and right-hand annotation", () => {
+    const plain = stripVTControlCharacters(banner("digest", "5 sessions"));
+    expect(plain).toMatch(/^── digest ─+ 5 sessions$/);
+  });
+
+  it("omits the right column when not given", () => {
+    const plain = stripVTControlCharacters(banner("cluster"));
+    expect(plain).toMatch(/^── cluster ─+$/);
+    expect(plain).not.toContain("  ");
+  });
+
+  it("aligns the right column across labels of different lengths", () => {
+    const a = stripVTControlCharacters(banner("digest", "R"));
+    const b = stripVTControlCharacters(banner("author", "R"));
+    expect(a.indexOf(" R")).toBe(b.indexOf(" R"));
+  });
+});
+
+describe("status glyphs", () => {
+  it("prefix the line with the matching glyph", () => {
+    expect(stripVTControlCharacters(ok("done"))).toBe("✔ done");
+    expect(stripVTControlCharacters(fail("broke"))).toBe("✗ broke");
+    expect(stripVTControlCharacters(skip("cut"))).toBe("⤬ cut");
   });
 });
