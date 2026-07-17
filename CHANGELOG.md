@@ -34,8 +34,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one-time notice with the `--source claude` escape; `status` breaks the
   discovered count down per source; the kiro runner reports total
   `Credits:` spent per distill run.
+- **Colorful distill flow.** Each stage prints a banner (`── digest ───── 5
+  session(s)`) with a bold label, dim rule, and cyan count for digest, cluster,
+  author, and budget; per-item lines gain colored status glyphs (green `✔`,
+  red `✗`, yellow `⤬`) and stage summaries turn green when nothing failed.
+- **Preferences clipboard offer.** At the end of a `preferences` run,
+  cc-hindsight offers to copy the rendered block to the clipboard (enter =
+  yes; `--yes` copies without asking; silent in pipes) and prints paste
+  guidance naming the target file (`CLAUDE.md`, kiro steering, or `AGENTS.md`).
+- **Distill preferences cascade.** After a successful `distill`, a press-enter
+  cascade offers to consolidate the freshly observed preferences (one runner
+  call, cost named in the prompt) and then copy the result to the clipboard,
+  closing the loop from history to a paste-ready guidance block.
+- **Git-ref installs.** A `prepare` script builds `dist` on install, so
+  `npx github:adityaarunsinghal/cc-hindsight#<ref>` works from any branch,
+  tag, or commit; the build's output routes to stderr so `npm pack --json`
+  capture stays parseable on every npm version (with `--ignore-scripts` kept
+  where npm honors it).
 
 ### Changed
+
+- The package description and keywords are de-branded to the coding-agent
+  framing, naming both Claude Code and kiro-cli (new keywords `kiro`,
+  `kiro-cli`, `agents`); the root `--help` and README intro follow suit.
 
 - Internal refactor: extraction, discovery, and the runner moved behind a
   source-agnostic `SessionSource` / `AgentRunner` seam (`src/sources/`,
