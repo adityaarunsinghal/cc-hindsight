@@ -35,7 +35,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "prepare": "npm run build",
+    "prepare": "npm run build --silent 1>&2",
     "test": "vitest run",
     "lint": "biome check .",
     "format": "biome format --write .",

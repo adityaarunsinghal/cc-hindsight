@@ -31,7 +31,10 @@ jobs:
       - run: npm run build
       # Package hygiene: the tarball must contain dist + the standard metadata
       # files and NOTHING else (no src/, test/, fixtures, or config).
-      # --ignore-scripts: dist is already built above; without it, the `prepare`
-      # lifecycle re-runs the build and its banner contaminates the JSON capture.
+      # --ignore-scripts skips a redundant `prepare` rebuild where npm honors it
+      # (npm 11+; npm 10 runs prepare during pack regardless), so the check
+      # inspects the dist/ the build step above just produced. JSON-capture
+      # safety does NOT depend on it: `prepare` routes its stdout to stderr
+      # precisely so a mid-pack build can never corrupt this file.
       - run: npm pack --dry-run --json --ignore-scripts > pack.json
       - run: node scripts/check-pack.mjs pack.json
