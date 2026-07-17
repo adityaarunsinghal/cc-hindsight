@@ -80,6 +80,21 @@ function inputWith(line: string): Readable {
   return pt;
 }
 
+/** Recording fake clipboard: captures the text and reports a fixed tool. */
+function fakeClipboard(): {
+  copy: (text: string) => Promise<{ ok: true; tool: string }>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  return {
+    calls,
+    copy: async (text: string) => {
+      calls.push(text);
+      return { ok: true, tool: "pbcopy" };
+    },
+  };
+}
+
 // --- aggregation -------------------------------------------------------------
 
 describe("normalizeKey", () => {
@@ -303,5 +318,77 @@ describe("runPreferences", () => {
     // still yields the usable deterministic artifact:
     expect(cap.text()).toContain("## Working preferences");
     expect(cap.text()).toContain("- be terse");
+  });
+
+  it("plain mode: enter (default yes) copies the exact rendered block and shows the target", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    writeLibraryEntry(home, entry("t-two-b", [{ text: "Be terse!", evidence: "e" }]));
+    const cap = capture();
+    const clip = fakeClipboard();
+    const code = await runPreferences(
+      { home },
+      { output: cap.out, input: inputWith("\n"), clipboard: clip.copy },
+    );
+    expect(code).toBe(0);
+    // clipboard received the exact rendered block (no trailing newline).
+    const prefs = aggregatePreferences([
+      entry("t-one-a", [{ text: "be terse", evidence: "e" }]),
+      entry("t-two-b", [{ text: "Be terse!", evidence: "e" }]),
+    ]);
+    const expected = renderPreferencesBlock(prefs, 2, "claude");
+    expect(clip.calls).toHaveLength(1);
+    expect(clip.calls[0]?.replace(/generated \d{4}-\d{2}-\d{2}/, "generated DATE")).toBe(
+      expected.replace(/generated \d{4}-\d{2}-\d{2}/, "generated DATE"),
+    );
+    expect(cap.text()).toContain("copied (");
+    expect(cap.text()).toContain("CLAUDE.md");
+  });
+
+  it("plain mode: answering n skips the copy entirely", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const clip = fakeClipboard();
+    const code = await runPreferences(
+      { home },
+      { output: cap.out, input: inputWith("n\n"), clipboard: clip.copy },
+    );
+    expect(code).toBe(0);
+    expect(clip.calls).toHaveLength(0);
+    expect(cap.text()).not.toContain("copied (");
+  });
+
+  it("plain mode: no input stream (pipe/CI) never offers a copy", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const clip = fakeClipboard();
+    const code = await runPreferences({ home }, { output: cap.out, clipboard: clip.copy });
+    expect(code).toBe(0);
+    expect(clip.calls).toHaveLength(0);
+    expect(cap.text()).not.toContain("copied (");
+    expect(cap.text()).not.toContain("Copy block to clipboard?");
+  });
+
+  it("--consolidate with --yes copies the consolidated block", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    writeLibraryEntry(home, entry("t-two-b", [{ text: "keep answers terse", evidence: "e" }]));
+    const cap = capture();
+    const clip = fakeClipboard();
+    const runner: RunnerFn = (async () => ({
+      preferences: [{ text: "be terse", merged_from: 2 }],
+    })) as RunnerFn;
+    const code = await runPreferences(
+      { home, consolidate: true, yes: true },
+      { output: cap.out, runner, clipboard: clip.copy },
+    );
+    expect(code).toBe(0);
+    expect(clip.calls).toHaveLength(1);
+    // the consolidated block is a flat list with no per-task evidence counts.
+    expect(clip.calls[0]).toContain("- be terse");
+    expect(clip.calls[0]).not.toContain("stated in");
+    expect(cap.text()).toContain("copied (1 preference(s)");
   });
 });

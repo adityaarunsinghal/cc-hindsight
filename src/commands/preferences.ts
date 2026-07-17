@@ -14,8 +14,9 @@ import type { RunnerFn } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
 import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
+import { copyToClipboard } from "../ui/clipboard.js";
 import { withSpinner } from "../ui/progress.js";
-import { cyan, dim, green, hint } from "../ui/style.js";
+import { cyan, dim, green, hint, ok } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 /** Injectable dependencies (testing). */
@@ -23,6 +24,11 @@ export interface PreferencesDeps {
   runner?: RunnerFn;
   input?: Readable;
   output?: Writable;
+  /**
+   * Clipboard sink; injectable so tests never touch a real clipboard. Shape
+   * matches copyToClipboard's return (tool is reported even on failure).
+   */
+  clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
 
 /** Build the one-call consolidation prompt (merge duplicates, tighten wording). */
@@ -83,9 +89,22 @@ export async function runPreferences(
   write();
 
   if (!args.consolidate) {
-    write(renderPreferencesBlock(prefs, entries.length, target));
+    const block = renderPreferencesBlock(prefs, entries.length, target);
+    write(block);
     write();
-    for (const line of targetFooter(target)) write(dim(line));
+    // Offer the copy first; on a successful copy the guidance prints after the
+    // confirmation. When no copy happens (declined, failure, or pipe/CI), fall
+    // back to the footer in its original position so guidance prints exactly
+    // once either way.
+    const { copied } = await offerCopyBlock({
+      block,
+      count: prefs.length,
+      target,
+      yes: Boolean(args.yes),
+      deps,
+      output: out,
+    });
+    if (!copied) for (const line of targetFooter(target)) write(line);
     return 0;
   }
 
@@ -118,7 +137,7 @@ export async function runPreferences(
   }
 
   const runner: RunnerFn = deps.runner ?? (resolved as NonNullable<typeof resolved>).run;
-  const { merged } = await runConsolidation({
+  const { merged, block } = await runConsolidation({
     prefs,
     taskCount: entries.length,
     target,
@@ -126,6 +145,18 @@ export async function runPreferences(
     model: args.model,
     output: out,
   });
+  // Offer to copy the merged block (only on success; the failure path already
+  // fell back to the deterministic block and returns 1 unchanged).
+  if (merged !== null && block !== null) {
+    await offerCopyBlock({
+      block,
+      count: merged.length,
+      target,
+      yes: Boolean(args.yes),
+      deps,
+      output: out,
+    });
+  }
   // Once-per-run teardown (kiro: delete this run's auto-saved session). Called
   // in both paths; finalize is idempotent-once-per-run and emits no output, so
   // moving it past the rendering keeps the byte stream identical.
@@ -133,9 +164,14 @@ export async function runPreferences(
   return merged === null ? 1 : 0;
 }
 
-/** Result of a consolidation pass; `merged` is null when the runner call failed. */
+/**
+ * Result of a consolidation pass; `merged` is null when the runner call failed.
+ * `block` is the exact rendered string that was written on success (so callers
+ * can offer to copy the very same bytes), null on failure.
+ */
 export interface ConsolidationOutcome {
   merged: AggregatedPreference[] | null;
+  block: string | null;
 }
 
 /**
@@ -172,7 +208,7 @@ export async function runConsolidation(opts: {
     write(dim("falling back to the unconsolidated block; retry with --model <model>."));
     write();
     write(renderPreferencesBlock(prefs, taskCount, target));
-    return { merged: null };
+    return { merged: null, block: null };
   }
 
   const merged: AggregatedPreference[] = consolidated.preferences.map((p) => ({
@@ -181,11 +217,12 @@ export async function runConsolidation(opts: {
     occurrences: [],
     lastAuthoredAt: "",
   }));
+  const block = renderPreferencesBlock(merged, taskCount, target);
   write();
-  write(renderPreferencesBlock(merged, taskCount, target));
+  write(block);
   write();
   write(dim(`consolidated ${prefs.length} → ${merged.length} preference(s).`));
-  return { merged };
+  return { merged, block };
 }
 
 /**
@@ -204,25 +241,80 @@ function resolveTarget(
   return sourceMode === "kiro" ? "kiro" : "claude";
 }
 
-/** Per-target paste instructions shown under the rendered block. */
+/**
+ * Per-target paste instructions shown under the rendered block. The destination
+ * filename is colored cyan (it is the actionable bit); the rest stays dim, so
+ * these lines are pre-styled and written verbatim (no outer dim() at the call
+ * site).
+ */
 function targetFooter(target: PreferencesTarget): string[] {
   switch (target) {
     case "kiro":
       return [
-        "paste the block into ~/.kiro/steering/hindsight-preferences.md (global) or",
-        ".kiro/steering/ (workspace) — or run with --consolidate to merge near-duplicates.",
+        dim("paste the block into ") +
+          cyan("~/.kiro/steering/hindsight-preferences.md") +
+          dim(" (global) or"),
+        cyan(".kiro/steering/") +
+          dim(" (workspace) — or run with --consolidate to merge near-duplicates."),
       ];
     case "agents":
       return [
-        "add the block to your AGENTS.md — kiro and other agent CLIs auto-inherit it.",
-        "or run with --consolidate to merge near-duplicates with one runner call.",
+        dim("add the block to your ") +
+          cyan("AGENTS.md") +
+          dim(" — kiro and other agent CLIs auto-inherit it."),
+        dim("or run with --consolidate to merge near-duplicates with one runner call."),
       ];
     default:
       return [
-        "paste the block into your CLAUDE.md — or run with --consolidate",
-        "to merge near-duplicates with one runner call.",
+        dim("paste the block into your ") + cyan("CLAUDE.md") + dim(" — or run with --consolidate"),
+        dim("to merge near-duplicates with one runner call."),
       ];
   }
+}
+
+/**
+ * End-of-run clipboard offer, shared by both modes. Copies the exact rendered
+ * `block` bytes. Offer policy mirrors distill: --yes copies without prompting;
+ * otherwise prompt only when there is a stream to prompt on (injected input or
+ * a real TTY); a pipe/CI without --yes skips the offer entirely. On a successful
+ * copy the paste guidance follows the confirmation. Returns whether the block
+ * was copied, so the plain path can still print its footer when no copy landed.
+ */
+async function offerCopyBlock(opts: {
+  block: string;
+  count: number;
+  target: PreferencesTarget;
+  yes: boolean;
+  deps: PreferencesDeps;
+  output: Writable;
+}): Promise<{ copied: boolean }> {
+  const { block, count, target, yes, deps, output } = opts;
+  const write = (s = "") => output.write(`${s}\n`);
+  const canPrompt = Boolean(deps.input) || process.stdin.isTTY === true;
+
+  let doCopy: boolean;
+  if (yes) doCopy = true;
+  else if (canPrompt)
+    doCopy = await askYesNo("Copy block to clipboard?", {
+      input: deps.input,
+      output: deps.output,
+      defaultYes: true, // empty input (plain enter) means yes
+    });
+  else return { copied: false }; // pipe/CI without --yes: no offer, output unchanged
+
+  if (!doCopy) return { copied: false };
+
+  const copy = deps.clipboard ?? copyToClipboard;
+  const result = await copy(block);
+  if (!result.ok) {
+    // best-effort: the block is still on screen, so keep the exit code and
+    // point the user at manual selection.
+    write(dim(`could not copy (${result.error}); select the block above manually.`));
+    return { copied: false };
+  }
+  write(`  ${ok(`copied (${count} preference(s), via ${result.tool})`)}`);
+  for (const line of targetFooter(target)) write(line);
+  return { copied: true };
 }
 
 export default defineCommand({
