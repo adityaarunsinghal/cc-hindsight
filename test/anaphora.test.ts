@@ -8,7 +8,7 @@ import {
   wordCount,
 } from "../src/core/anaphora.js";
 import { buildCorpus, type CorpusSession, type DedupeInput } from "../src/core/dedupe.js";
-import { extractMessages, extractTimeline } from "../src/core/extract.js";
+import { extractMessages, extractTimeline, type TimelineEvent } from "../src/core/extract.js";
 import { renderExport } from "../src/core/render.js";
 
 // ---- JSONL line builders (synthetic; never the real ~/.claude) ----------
@@ -290,4 +290,61 @@ describe("anaphora — v1 branching limitation (documented)", () => {
   it.todo(
     "v1.1: parentUuid-aware antecedent selection picks the correct branch on regenerated conversations",
   );
+});
+
+// ---- boundary events (kiro Clear/Compaction) close context windows ---------
+
+describe("boundary events close the antecedent and decision windows", () => {
+  // A hand-built timeline (the kiro source emits `boundary` for Clear and
+  // Compaction; Claude Code emits none, making this a no-op there). The
+  // session's one short human turn matches the timeline's human event
+  // byte-for-byte, per the SessionSource law.
+  const T0 = "2026-02-01T00:00:00.000Z";
+  const T1 = "2026-02-01T00:01:00.000Z";
+  const T2 = "2026-02-01T00:02:00.000Z";
+  const mkSession = (): CorpusSession => {
+    const corpus = buildCorpus([
+      {
+        project: "p",
+        sessionId: "s",
+        sourcePath: "/p/s.jsonl",
+        extracted: {
+          messages: [{ timestamp: T2, text: "yes" }],
+          drops: [],
+          badLines: 0,
+        },
+      },
+    ]);
+    const session = corpus.sessions[0];
+    if (!session) throw new Error("corpus built no session");
+    return session;
+  };
+
+  it("without a boundary, the antecedent and the pending plan both attach", () => {
+    const timeline: TimelineEvent[] = [
+      { kind: "assistant", timestamp: T0, text: "a long analysis ending in the ask" },
+      { kind: "plan", timestamp: T1, text: "the proposed plan" },
+      { kind: "human", timestamp: T2, text: "yes" },
+    ];
+    const [record] = buildAnaphora(mkSession(), timeline);
+    expect(record?.antecedent).toContain("the ask");
+    expect(record?.decision_kind).toBe("plan");
+    expect(record?.decision_text).toBe("the proposed plan");
+  });
+
+  it("a boundary between them yields NO antecedent and NO pending decision", () => {
+    // The model never saw pre-boundary text after a /clear — so a bare "yes"
+    // cannot be answering the pre-boundary plan, and the assistant essay
+    // before the reset is not its antecedent.
+    const timeline: TimelineEvent[] = [
+      { kind: "assistant", timestamp: T0, text: "a long analysis ending in the ask" },
+      { kind: "plan", timestamp: T1, text: "the proposed plan" },
+      { kind: "boundary", timestamp: "", text: "Clear" },
+      { kind: "human", timestamp: T2, text: "yes" },
+    ];
+    const [record] = buildAnaphora(mkSession(), timeline);
+    expect(record?.antecedent).toBeNull();
+    expect(record?.decision_kind).toBeNull();
+    expect(record?.decision_text).toBeNull();
+  });
 });

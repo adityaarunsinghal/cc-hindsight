@@ -1,4 +1,5 @@
 import { defineCommand } from "citty";
+import { countOrphanHistories } from "../sources/kiro/discover.js";
 import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { ProjectInfo } from "../sources/types.js";
 import { cyan, dim, green, hint, table } from "../ui/style.js";
@@ -58,13 +59,23 @@ export function runScan(args: {
   const sessionTotal = projects.reduce((sum, p) => sum + p.sessions.length, 0);
   console.log("");
   console.log(green(`${projects.length} projects, ${sessionTotal} sessions`));
+  // Orphan .history files: a human typed in these sessions but the transcript
+  // was deleted — keep the inventory honest about what can't be exported.
+  if (mode !== "claude") {
+    const orphans = countOrphanHistories(kiroDir);
+    if (orphans > 0) {
+      console.log(
+        dim(`${orphans} kiro session(s) whose transcript is gone (orphan .history) — not counted`),
+      );
+    }
+  }
   console.log(hint("cc-hindsight export"));
 }
 
 export default defineCommand({
   meta: {
     name: "scan",
-    description: "Inventory Claude Code projects and sessions",
+    description: "Inventory Claude Code and kiro-cli projects and sessions",
   },
   args: { ...sharedArgs },
   run({ args }) {

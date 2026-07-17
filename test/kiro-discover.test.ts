@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { discoverKiroSessions } from "../src/sources/kiro/discover.js";
+import { countOrphanHistories, discoverKiroSessions } from "../src/sources/kiro/discover.js";
 import { kiroSource } from "../src/sources/kiro/index.js";
 
 // Always drive discovery with the synthetic fixture, never the real ~/.kiro.
@@ -12,6 +12,7 @@ const CLI = path.join(KIRO_HOME, "sessions", "cli");
 const MTIMES: Record<string, string> = {
   "s-webapp-1.jsonl": "2026-07-13T10:10:00Z",
   "s-webapp-auto.jsonl": "2026-07-13T11:05:00Z",
+  "s-webapp-hybrid.jsonl": "2026-07-13T12:05:00Z",
   "s-api-1.jsonl": "2026-07-14T09:20:00Z",
   "s-api-child.jsonl": "2026-07-14T09:06:00Z",
 };
@@ -50,9 +51,10 @@ describe("discoverKiroSessions — flat store, grouped by cwd", () => {
 
   it("ignores .json/.history/.lock companions and the tasks-sidecar subdir", () => {
     const projects = discoverKiroSessions(KIRO_HOME, { countEntries: false });
-    // Only the 4 .jsonl sessions become SessionInfo — never the lock/sidecar.
+    // Only the 5 .jsonl sessions become SessionInfo — never the lock/sidecar,
+    // and never the orphan .history (its transcript is gone).
     const total = projects.reduce((n, p) => n + p.sessions.length, 0);
-    expect(total).toBe(4);
+    expect(total).toBe(5);
     for (const p of projects) {
       for (const s of p.sessions) expect(s.file.endsWith(".jsonl")).toBe(true);
     }
@@ -106,5 +108,29 @@ describe("kiroSource — SessionSource classify (K2)", () => {
     const s = byFile.get("s-api-1.jsonl");
     if (!s) throw new Error("missing fixture");
     expect(source.classify?.(s)).toBe("interactive");
+  });
+
+  it("INCLUDES a hybrid session (parent-linked AND .history) — K2 step-1 precedence", () => {
+    // A rewind/agent-spawned child a human later steered: .history overrides
+    // the parent_session_id exclusion AND the automation first prompt.
+    const meta = discoverKiroSessions(KIRO_HOME, { countEntries: false })
+      .flatMap((p) => p.sessions)
+      .find((s) => s.file === "s-webapp-hybrid.jsonl")?.meta;
+    expect(meta?.parentSessionId).toBe("s-webapp-1"); // it IS parent-linked
+    expect(meta?.hasHistory).toBe(true); // and a human typed here
+    const s = byFile.get("s-webapp-hybrid.jsonl");
+    if (!s) throw new Error("missing fixture");
+    expect(source.classify?.(s)).toBe("interactive");
+  });
+});
+
+describe("countOrphanHistories — .history with no transcript", () => {
+  it("counts the orphan in the fixture store (transcript deleted)", () => {
+    // s-deleted-orphan.history exists with no s-deleted-orphan.jsonl.
+    expect(countOrphanHistories(KIRO_HOME)).toBe(1);
+  });
+
+  it("returns 0 for a missing store (never throws)", () => {
+    expect(countOrphanHistories(path.join(KIRO_HOME, "nope"))).toBe(0);
   });
 });

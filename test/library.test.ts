@@ -306,3 +306,36 @@ describe("renderStatus", () => {
     expect(out).toContain("⚠ merged-away-task");
   });
 });
+
+// ---- status: dual-store discovered breakdown --------------------------------
+
+describe("renderStatus — per-source discovered breakdown", () => {
+  const FIXTURES = path.join(import.meta.dirname, "fixtures");
+
+  it("shows (N claude, M kiro) when both stores are active, plus the orphan-history note", () => {
+    const home = tmpHome();
+    const out = renderStatus({
+      home,
+      claudeDir: path.join(FIXTURES, "export-home"),
+      kiroDir: path.join(FIXTURES, "kiro-home"),
+      source: "auto",
+    });
+    // export-home holds 4 claude sessions (alpha + beta); kiro-home holds 5 transcripts.
+    expect(out).toContain("discovered");
+    expect(out).toContain("(4 claude, 5 kiro)");
+    // The orphan .history in kiro-home is surfaced here too.
+    expect(out).toContain("1 kiro session(s) whose transcript is gone");
+  });
+
+  it("shows no breakdown when a single store is active", () => {
+    const home = tmpHome();
+    const out = renderStatus({
+      home,
+      claudeDir: path.join(FIXTURES, "export-home"),
+      kiroDir: path.join(FIXTURES, "does-not-exist"),
+      source: "auto",
+    });
+    expect(out).not.toContain("claude,");
+    expect(out).not.toContain("kiro)");
+  });
+});

@@ -11,10 +11,12 @@ import type { SessionSource, SourceName } from "./types.js";
  *
  * - `claude` / `kiro`: exactly that one backend (even if its store is empty —
  *   an explicit choice is honored).
- * - `auto` (default): every backend whose on-disk store EXISTS, in the fixed
- *   order claude-then-kiro. A machine with only one store gets exactly that
- *   one; a machine with neither gets an empty list (commands then report
- *   "nothing found" exactly as before).
+ * - `auto` (default): every backend whose on-disk store EXISTS and holds at
+ *   least one project, in the fixed order claude-then-kiro. A machine with
+ *   only one populated store gets exactly that one; a machine with neither
+ *   gets an empty list (commands then report "nothing found" exactly as
+ *   before). An existing-but-empty store contributes nothing, so it never
+ *   pads stats breakdowns with zero entries.
  *
  * An unknown value throws — the caller maps that to exit 1.
  */
@@ -55,16 +57,24 @@ export function parseSourceMode(raw: string | undefined): SourceMode {
 
 /**
  * Resolve the source mode into the ordered list of backends to run. `auto`
- * probes each store's existence; explicit modes always return their one
- * backend. Order is always claude-then-kiro so merged output is deterministic.
+ * probes each store's existence AND requires it to discover at least one
+ * project; explicit modes always return their one backend. Order is always
+ * claude-then-kiro so merged output is deterministic.
  */
 export function resolveSources(mode: SourceMode, dirs: SourceDirs): SessionSource[] {
   if (mode === "claude") return [claudeSource(dirs.claudeDir)];
   if (mode === "kiro") return [kiroSource(dirs.kiroDir)];
 
-  // auto — include each backend whose store exists.
+  // auto — include each backend whose store exists and holds ≥1 project (the
+  // discover call is a cheap directory listing; countEntries stays off).
   const sources: SessionSource[] = [];
-  if (claudeStoreExists(dirs.claudeDir)) sources.push(claudeSource(dirs.claudeDir));
-  if (kiroStoreExists(dirs.kiroDir)) sources.push(kiroSource(dirs.kiroDir));
+  if (claudeStoreExists(dirs.claudeDir)) {
+    const claude = claudeSource(dirs.claudeDir);
+    if (claude.discover({ countEntries: false }).length > 0) sources.push(claude);
+  }
+  if (kiroStoreExists(dirs.kiroDir)) {
+    const kiro = kiroSource(dirs.kiroDir);
+    if (kiro.discover({ countEntries: false }).length > 0) sources.push(kiro);
+  }
   return sources;
 }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { KiroSessionMeta } from "../src/sources/kiro/discover.js";
 import {
   classifyKiroLines,
+  classifyKiroSession,
   extractKiroMessages,
   kiroTimeline,
 } from "../src/sources/kiro/extract.js";
@@ -51,6 +52,21 @@ describe("kiro extract — K6 machine-piece drops", () => {
   });
 });
 
+describe("kiro extract — K11 non-text Prompt blocks", () => {
+  it("renders an image block as the R11-parity placeholder", () => {
+    const { messages } = extractKiroMessages(lines("k11-unknown-block.jsonl"));
+    // The placeholder joins the surviving text piece (blank-line separated).
+    expect(messages.map((m) => m.text)).toEqual(["look at this screenshot\n\n[image pasted]"]);
+  });
+
+  it("records an observable Drop for an unknown block kind (never silent)", () => {
+    const { drops } = extractKiroMessages(lines("k11-unknown-block.jsonl"));
+    const k11 = drops.filter((d) => d.reason.startsWith("K11"));
+    expect(k11.length).toBe(1);
+    expect(k11[0]?.reason).toBe("K11: unknown block kind (hologram)");
+  });
+});
+
 describe("kiro extract — K12 boundaries & snapshot", () => {
   it("ignores Clear/Compaction as human text; snapshot is not re-extracted", () => {
     const { messages } = extractKiroMessages(lines("k12-boundaries.jsonl"));
@@ -65,6 +81,18 @@ describe("kiro extract — K12 boundaries & snapshot", () => {
     expect(kinds.filter((k) => k === "boundary").length).toBe(2);
     // A human turn precedes the first boundary; another follows it.
     expect(kinds).toEqual(["human", "assistant", "boundary", "human", "boundary"]);
+  });
+
+  it("records a Drop for a snapshot-only prompt (never silently absent)", () => {
+    const { messages, drops } = extractKiroMessages(lines("k12-snapshot-only.jsonl"));
+    // Only the live prompt is extracted…
+    expect(messages.map((m) => m.text)).toEqual(["live prompt"]);
+    // …the snapshot item that duplicates it records nothing, and the
+    // snapshot-ONLY item (e.g. /chat load-imported pre-compaction history)
+    // is visible in the drop ledger.
+    const k12 = drops.filter((d) => d.reason === "K12: snapshot-only prompt");
+    expect(k12.length).toBe(1);
+    expect(k12[0]?.snippet).toContain("imported pre-compaction prompt");
   });
 });
 
@@ -82,7 +110,9 @@ describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", 
   for (const fixture of [
     "k1-prompt.jsonl",
     "k6-machine.jsonl",
+    "k11-unknown-block.jsonl",
     "k12-boundaries.jsonl",
+    "k12-snapshot-only.jsonl",
     "k5-cancelled-tool.jsonl",
   ]) {
     it(`holds for ${fixture}`, () => {
@@ -93,6 +123,22 @@ describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", 
       );
     });
   }
+});
+
+describe("kiro extract — K2 hybrid precedence (unit)", () => {
+  it("a parent-linked (rewind/subagent) session WITH .history is INCLUDED — step 1 beats step 2", () => {
+    const hybrid: KiroSessionMeta = { hasHistory: true, parentSessionId: "parent-uuid" };
+    const verdict = classifyKiroSession(hybrid, "[AGENT SYSTEM PROMPT] You are a spawned worker.");
+    expect(verdict.include).toBe(true);
+    expect(verdict.reason).toContain(".history present");
+  });
+
+  it("the same session WITHOUT .history is excluded as a spawned child", () => {
+    const child: KiroSessionMeta = { hasHistory: false, parentSessionId: "parent-uuid" };
+    expect(
+      classifyKiroSession(child, "[AGENT SYSTEM PROMPT] You are a spawned worker.").include,
+    ).toBe(false);
+  });
 });
 
 describe("kiro extract — K13 self-recognition (classify)", () => {

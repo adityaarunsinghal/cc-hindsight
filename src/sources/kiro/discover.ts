@@ -106,6 +106,33 @@ function countFileEntries(filePath: string): number {
 }
 
 /**
+ * Count orphan `.history` files: readline histories whose `<uuid>.jsonl`
+ * transcript no longer exists (5 in the reference census — sessions a human
+ * typed in whose transcript was deleted). Surfaced by scan/status so the
+ * inventory stays honest about human sessions that can no longer be exported.
+ * Missing store → 0 (never throws).
+ */
+export function countOrphanHistories(kiroDir: string): number {
+  const sessionsRoot = path.join(kiroDir, KIRO_SESSIONS_SUBDIR);
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  const transcripts = new Set<string>();
+  const histories: string[] = [];
+  for (const dirent of dirents) {
+    if (!dirent.isFile()) continue;
+    if (dirent.name.endsWith(".jsonl")) transcripts.add(dirent.name.replace(/\.jsonl$/, ""));
+    else if (dirent.name.endsWith(".history")) {
+      histories.push(dirent.name.replace(/\.history$/, ""));
+    }
+  }
+  return histories.filter((stem) => !transcripts.has(stem)).length;
+}
+
+/**
  * Enumerate every kiro session under `<kiroDir>/sessions/cli`, grouped into
  * projects by metadata `cwd`.
  *

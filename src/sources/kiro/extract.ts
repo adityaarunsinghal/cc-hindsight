@@ -96,7 +96,23 @@ function promptText(data: unknown, drops: Drop[], ts: string): string | null {
   const pieces: string[] = [];
   for (const block of content) {
     if (!isRecord(block)) continue;
-    if (block.kind !== "text") continue; // K4 — only text blocks are candidate human input
+    if (block.kind !== "text") {
+      // K11 — no non-text Prompt block was ever observed (0/410 in the census),
+      // but format drift must stay visible (fidelity contract): an image block
+      // becomes the same placeholder Claude Code's R11 renders; any other kind
+      // is recorded as an observable Drop rather than vanishing silently.
+      if (block.kind === "image") {
+        pieces.push("[image pasted]");
+      } else {
+        const raw = typeof block.data === "string" ? block.data : JSON.stringify(block.data ?? "");
+        drops.push({
+          reason: `K11: unknown block kind (${String(block.kind)})`,
+          snippet: snippet(raw ?? ""),
+          timestamp: ts || undefined,
+        });
+      }
+      continue;
+    }
     const raw = typeof block.data === "string" ? block.data : "";
     const text = raw.trim();
     if (text === "") {
@@ -161,6 +177,15 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
   const drops: Drop[] = [];
   let badLines = 0;
 
+  // K12 observability: live Prompt keys vs user-role Compaction-snapshot items.
+  // A snapshot normally duplicates earlier same-file entries (ignored); a
+  // snapshot prompt that never appears live (e.g. `/chat load`-imported
+  // pre-compaction history) would otherwise be INVISIBLY absent — record it as
+  // a Drop so the fidelity ledger shows it.
+  const liveKeys = new Set<string>();
+  const snapshotPrompts: { ts: string; text: string }[] = [];
+  const scratchDrops: Drop[] = []; // snapshot pieces must not pollute the real ledger
+
   for (const line of lines) {
     if (line.trim() === "") continue;
 
@@ -176,13 +201,42 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
       continue;
     }
 
+    const data = parsed.data;
+
+    // K12 — Compaction is never re-extracted, but its user-role snapshot items
+    // are checked (post-loop) against the live prompts of this same file.
+    if (parsed.kind === "Compaction") {
+      const snapshot = isRecord(data) ? data.messages_snapshot : undefined;
+      if (Array.isArray(snapshot)) {
+        for (const item of snapshot) {
+          if (!isRecord(item) || item.role !== "user") continue;
+          const ts = normalizeTimestamp(item.meta);
+          const text = promptText(item, scratchDrops, ts);
+          if (text !== null) snapshotPrompts.push({ ts, text });
+        }
+      }
+      continue;
+    }
+
     // K1 — only Prompt entries are candidate human input.
     if (parsed.kind !== "Prompt") continue;
 
-    const data = parsed.data;
     const ts = normalizeTimestamp(isRecord(data) ? data.meta : undefined);
     const text = promptText(data, drops, ts);
-    if (text !== null) messages.push({ timestamp: ts, text });
+    if (text !== null) {
+      messages.push({ timestamp: ts, text });
+      liveKeys.add(`${ts}\u0000${text}`);
+    }
+  }
+
+  for (const snap of snapshotPrompts) {
+    if (!liveKeys.has(`${snap.ts}\u0000${snap.text}`)) {
+      drops.push({
+        reason: "K12: snapshot-only prompt",
+        snippet: snippet(snap.text),
+        timestamp: snap.ts || undefined,
+      });
+    }
   }
 
   return { messages, drops, badLines };

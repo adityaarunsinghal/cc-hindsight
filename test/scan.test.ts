@@ -90,6 +90,8 @@ describe("scan command", () => {
     const out = captureScanKiro({ "kiro-dir": KIRO_HOME });
     expect(out).toContain("webapp");
     expect(out).toContain("api");
+    // The orphan .history (transcript deleted) is surfaced, not silently absent.
+    expect(out).toContain("1 kiro session(s) whose transcript is gone");
     expect(out).toContain("→ next: cc-hindsight export");
   });
 
