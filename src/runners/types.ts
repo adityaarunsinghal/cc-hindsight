@@ -46,4 +46,17 @@ export interface AgentRunner {
   readonly installHint: string;
   /** Invoke one stage: prompt+schema in, validated object out. */
   run<T>(opts: RunOptions<T>): Promise<T>;
+  /**
+   * Best-effort cost summary accumulated across this runner's calls (e.g. the
+   * kiro `Credits:` stderr footer), for the distill summary. Absent/undefined
+   * when the backend exposes no cost signal.
+   */
+  costSummary?(): string | undefined;
+  /**
+   * Once-per-run teardown, called after ALL stage calls have joined (kiro:
+   * delete the run's auto-saved sessions under the deletion-scope invariant).
+   * Never called mid-run, so it can never race an in-flight sibling worker.
+   * Best-effort — must not throw.
+   */
+  finalize?(): Promise<void>;
 }

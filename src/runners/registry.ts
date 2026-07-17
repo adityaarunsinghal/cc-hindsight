@@ -1,6 +1,6 @@
-import { claudeRunner } from "./claude.js";
-import { kiroRunner } from "./kiro.js";
-import { defaultIo, type RunnerIo } from "./shared.js";
+import { CLAUDE_INSTALL_HINT, claudeRunner } from "./claude.js";
+import { KIRO_INSTALL_HINT, kiroRunner, makeKiroRunner } from "./kiro.js";
+import { AgentRunnerError, defaultIo, type RunnerIo } from "./shared.js";
 import type { AgentRunner } from "./types.js";
 
 /**
@@ -22,28 +22,51 @@ export function parseRunnerMode(raw: string | undefined): RunnerMode {
   throw new Error(`unknown --runner "${raw}" (expected claude, kiro, or auto)`);
 }
 
+/** Options for {@link resolveRunner}. */
+export interface ResolveRunnerOptions {
+  /** Prefer the runner matching the active source under `auto`. */
+  preferSource?: "claude" | "kiro";
+  /** Injectable binary lookup/spawn (testing). */
+  io?: RunnerIo;
+  /**
+   * Base directory for the kiro runner's per-run scratch cwd (the distill
+   * home's `runner-scratch/`); absent falls back to the OS temp dir.
+   */
+  scratchBase?: string;
+}
+
 /**
- * Resolve the runner. Explicit modes return that runner (its own missing-binary
- * error fires at call time). `auto` prefers the runner whose name matches
- * `preferSource` when set, else the first installed of claude→kiro; if neither
- * binary is found it returns the claude runner so the standard missing-binary
- * hint is shown.
+ * Resolve the runner. EXPLICIT modes require that binary: a missing one throws
+ * a typed `missing-binary` {@link AgentRunnerError} with the backend's install
+ * hint at RESOLVE time — before any consent prompt, so the user learns the CLI
+ * is absent before being asked to approve spending. `auto` prefers the runner
+ * whose name matches `preferSource` when installed, else the first installed of
+ * claude→kiro; if neither binary is found it returns the claude runner so the
+ * standard missing-binary hint surfaces on first use.
  */
 export async function resolveRunner(
   mode: RunnerMode,
-  opts: { preferSource?: "claude" | "kiro"; io?: RunnerIo } = {},
+  opts: ResolveRunnerOptions = {},
 ): Promise<AgentRunner> {
-  if (mode === "claude") return claudeRunner;
-  if (mode === "kiro") return kiroRunner;
-
   const io = opts.io ?? defaultIo;
-  // auto — prefer the runner matching the active source when it is installed.
   const has = async (bin: string) => (await io.which(bin)) !== null;
-  if (opts.preferSource === "kiro" && (await has("kiro-cli"))) return kiroRunner;
+  const kiro = () => (opts.scratchBase ? makeKiroRunner(undefined, opts.scratchBase) : kiroRunner);
+
+  if (mode === "claude") {
+    if (!(await has("claude"))) throw new AgentRunnerError("missing-binary", CLAUDE_INSTALL_HINT);
+    return claudeRunner;
+  }
+  if (mode === "kiro") {
+    if (!(await has("kiro-cli"))) throw new AgentRunnerError("missing-binary", KIRO_INSTALL_HINT);
+    return kiro();
+  }
+
+  // auto — prefer the runner matching the active source when it is installed.
+  if (opts.preferSource === "kiro" && (await has("kiro-cli"))) return kiro();
   if (opts.preferSource === "claude" && (await has("claude"))) return claudeRunner;
   // Otherwise first installed of claude → kiro.
   if (await has("claude")) return claudeRunner;
-  if (await has("kiro-cli")) return kiroRunner;
+  if (await has("kiro-cli")) return kiro();
   // Neither found: return claude so its install hint surfaces on use.
   return claudeRunner;
 }

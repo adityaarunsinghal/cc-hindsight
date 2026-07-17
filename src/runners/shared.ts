@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { ZodType } from "zod";
 import type { RunnerErrorKind } from "./types.js";
 
 /**
@@ -162,4 +163,49 @@ export function stripFence(text: string): string {
   const trimmed = text.trim();
   const fence = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
   return fence?.[1] ? fence[1].trim() : trimmed;
+}
+
+// --- shared prompt/retry machinery -----------------------------------------
+
+/**
+ * Append the JSON schema to a prompt for backends that cannot validate
+ * server-side: claude uses it when the capability probe finds no
+ * `--json-schema`; kiro uses it always (no envelope, no server-side schema).
+ */
+export function embedSchema(prompt: string, schemaJson: string): string {
+  return `${prompt}\n\nRespond ONLY with JSON matching this schema:\n${schemaJson}`;
+}
+
+/** The corrective note appended to the prompt on the single validation retry. */
+export function correctiveNote(detail: string): string {
+  return `\n\nYour previous response could not be used (${detail}). Respond ONLY with valid JSON matching the required schema — no prose, no code fences.`;
+}
+
+/**
+ * The shared corrective-retry loop (both runners): run one backend-specific
+ * attempt (spawn + parse to a raw JSON value), validate against the zod
+ * schema, and on a parse/validation problem retry EXACTLY ONCE with the
+ * corrective note appended to the prompt. An {@link AgentRunnerError} from the
+ * attempt is fatal (missing binary, timeout, CLI error — a retry cannot help);
+ * anything else (RetryableError, zod failure) feeds the note. Exhaustion
+ * throws via `makeExhaustedError` so each backend keeps its exact error copy.
+ */
+export async function runWithCorrectiveRetry<T>(
+  basePrompt: string,
+  schema: ZodType<T>,
+  attemptFn: (input: string) => Promise<unknown>,
+  makeExhaustedError: (lastDetail: string) => AgentRunnerError,
+): Promise<T> {
+  let lastDetail = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const input = attempt === 0 ? basePrompt : basePrompt + correctiveNote(lastDetail);
+    try {
+      const raw = await attemptFn(input);
+      return schema.parse(raw);
+    } catch (err) {
+      if (err instanceof AgentRunnerError) throw err; // fatal — do not retry
+      lastDetail = err instanceof Error ? err.message : String(err);
+    }
+  }
+  throw makeExhaustedError(lastDetail);
 }

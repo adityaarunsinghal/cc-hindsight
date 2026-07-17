@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ClaudeRunnerError } from "../src/claude/runner.js";
-import { KIRO_NO_TOOLS_AGENT, type KiroEnv, runKiro } from "../src/runners/kiro.js";
+import { KIRO_NO_TOOLS_AGENT, type KiroEnv, makeKiroRunner, runKiro } from "../src/runners/kiro.js";
 import type { RunnerIo, SpawnResult } from "../src/runners/shared.js";
 import type { RunOptions } from "../src/runners/types.js";
 
@@ -152,36 +152,41 @@ describe("runKiro — errors", () => {
   });
 });
 
-describe("runKiro — session-store cleanup (deletion-safety invariant)", () => {
-  it("deletes ONLY sentinel-titled sessions in the scratch cwd group", async () => {
+describe("kiro runner — session-store cleanup via finalize (deletion-safety invariant)", () => {
+  const LISTING = [
+    {
+      cwd: SCRATCH,
+      sessions: [
+        { sessionId: "mine-1", title: "[cc-hindsight distill] digest this" },
+        { sessionId: "not-mine", title: "some human session that happened to share cwd" },
+      ],
+    },
+    {
+      cwd: "/home/user/real-project",
+      sessions: [{ sessionId: "REAL", title: "[cc-hindsight distill] looks like ours" }],
+    },
+  ];
+
+  it("finalize deletes ONLY sentinel-titled sessions in the scratch cwd group — and only ONCE per run, never mid-call", async () => {
     const deleted: string[] = [];
     const { env } = makeEnv([spawnResult({ stdout: '{"ok":true,"note":"x"}' })], {
-      // Listing returns MULTIPLE cwd groups; only the scratch one is in scope,
-      // and within it only sentinel-titled sessions are deleted.
-      listSessions: async () => [
-        {
-          cwd: SCRATCH,
-          sessions: [
-            { sessionId: "mine-1", title: "[cc-hindsight distill] digest this" },
-            { sessionId: "not-mine", title: "some human session that happened to share cwd" },
-          ],
-        },
-        {
-          cwd: "/home/user/real-project",
-          sessions: [{ sessionId: "REAL", title: "[cc-hindsight distill] looks like ours" }],
-        },
-      ],
+      listSessions: async () => LISTING,
       deleteSession: async (id) => {
         deleted.push(id);
       },
     });
-    await runKiro(OPTS, SCRATCH, env);
+    const runner = makeKiroRunner(env);
+    await runner.run(OPTS);
+    // No cleanup mid-run: a concurrent sibling's in-flight session can never be
+    // list-and-deleted by a worker that finished earlier.
+    expect(deleted).toEqual([]);
+    await runner.finalize?.();
     // Only the scratch-cwd sentinel session is deleted; the other cwd group and
     // the non-sentinel session in-scope both survive.
     expect(deleted).toEqual(["mine-1"]);
   });
 
-  it("cleanup runs even after a failed call and never masks the error", async () => {
+  it("finalize cleans up after a failed run too and never throws", async () => {
     const deleted: string[] = [];
     const { env } = makeEnv([spawnResult({ code: 1, stderr: "boom" })], {
       listSessions: async () => [
@@ -191,7 +196,75 @@ describe("runKiro — session-store cleanup (deletion-safety invariant)", () => 
         deleted.push(id);
       },
     });
-    await expect(runKiro(OPTS, SCRATCH, env)).rejects.toMatchObject({ kind: "cli-error" });
-    expect(deleted).toEqual(["s1"]); // cleanup still happened
+    const runner = makeKiroRunner(env);
+    await expect(runner.run(OPTS)).rejects.toMatchObject({ kind: "cli-error" });
+    await runner.finalize?.();
+    expect(deleted).toEqual(["s1"]); // cleanup still happened, once, at run end
+  });
+
+  it("finalize before any call is a no-op (no scratch dir was ever created)", async () => {
+    let listed = 0;
+    const { env } = makeEnv([], {
+      listSessions: async () => {
+        listed++;
+        return [];
+      },
+    });
+    const runner = makeKiroRunner(env);
+    await runner.finalize?.();
+    expect(listed).toBe(0);
+  });
+});
+
+describe("kiro runner — cost accounting (Credits stderr footer)", () => {
+  it("accumulates per-call credits into costSummary", async () => {
+    const { env } = makeEnv([
+      spawnResult({ stdout: '{"ok":true,"note":"a"}', stderr: "▸ Credits: 0.32 • Time: 4s" }),
+      spawnResult({ stdout: '{"ok":true,"note":"b"}', stderr: "▸ Credits: 0.5 • Time: 2s" }),
+    ]);
+    const runner = makeKiroRunner(env);
+    expect(runner.costSummary?.()).toBeUndefined(); // nothing spent yet
+    await runner.run(OPTS);
+    await runner.run(OPTS);
+    expect(runner.costSummary?.()).toBe("≈ 0.82 Kiro credits used this run");
+  });
+
+  it("stays undefined when stderr carries no credits line", async () => {
+    const { env } = makeEnv([spawnResult({ stdout: '{"ok":true,"note":"a"}' })]);
+    const runner = makeKiroRunner(env);
+    await runner.run(OPTS);
+    expect(runner.costSummary?.()).toBeUndefined();
+  });
+});
+
+describe("kiro runner — scratch cwd location", () => {
+  it("threads the home-scoped scratchBase into env.makeScratch", async () => {
+    const bases: (string | undefined)[] = [];
+    const { env } = makeEnv([spawnResult({ stdout: '{"ok":true,"note":"x"}' })]);
+    const recordingEnv: KiroEnv = {
+      ...env,
+      makeScratch: (base?: string) => {
+        bases.push(base);
+        return SCRATCH;
+      },
+    };
+    const runner = makeKiroRunner(recordingEnv, "/home/u/.cc-hindsight/runner-scratch");
+    await runner.run(OPTS);
+    expect(bases).toEqual(["/home/u/.cc-hindsight/runner-scratch"]);
+  });
+});
+
+describe("runKiro — sentinel echo in output (negative fixture)", () => {
+  it("a sentinel-echoing non-JSON response feeds the corrective retry, never store corruption", async () => {
+    // The model parrots the K13 sentinel back: the line is not valid JSON, so
+    // it must land in the corrective retry — the store is untouched either way
+    // (cleanup scope + K13 protect it).
+    const { env, calls } = makeEnv([
+      spawnResult({ stdout: '> [cc-hindsight distill] {"ok":true,"note":"echoed"}' }),
+      spawnResult({ stdout: '{"ok":true,"note":"clean"}' }),
+    ]);
+    const out = await runKiro(OPTS, SCRATCH, env);
+    expect(out.note).toBe("clean");
+    expect(calls[1]?.input).toContain("previous response could not be used");
   });
 });

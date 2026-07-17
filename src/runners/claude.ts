@@ -3,8 +3,10 @@ import {
   AgentRunnerError,
   DEFAULT_TIMEOUT_MS,
   defaultIo,
+  embedSchema,
   RetryableError,
   type RunnerIo,
+  runWithCorrectiveRetry,
   type SpawnResult,
   snippet,
   stripFence,
@@ -153,10 +155,10 @@ function buildArgs(caps: Capabilities, opts: RunClaudeOptions<unknown>): string[
 
 function buildPrompt(caps: Capabilities, opts: RunClaudeOptions<unknown>): string {
   let prompt = opts.prompt;
-  // Fallback when the CLI can't validate against a schema itself.
+  // Fallback when the CLI can't validate against a schema itself (shared with
+  // the kiro runner, which embeds always).
   if (!caps.jsonSchema) {
-    const json = JSON.stringify(toJsonSchema(opts.schema));
-    prompt += `\n\nRespond ONLY with JSON matching this schema:\n${json}`;
+    prompt = embedSchema(prompt, JSON.stringify(toJsonSchema(opts.schema)));
   }
   // Instruction-level tool disabling whenever we can't do it with the `--tools`
   // flag. Covers BOTH "none" (no tool flag at all) AND "disallowed": a CLI that
@@ -196,42 +198,34 @@ export async function runClaude<T>(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   const args = buildArgs(caps, opts);
-  const basePrompt = buildPrompt(caps, opts);
 
-  let lastDetail = "";
+  // Captured by the attempt closure so the exhaustion error carries the last
+  // spawn's stderr/stdout for reporting (behavior identical to the pre-seam
+  // inline loop).
   let lastOutput = "";
   let lastStderr = "";
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let input = basePrompt;
-    if (attempt === 1) {
-      input += `\n\nYour previous response could not be used (${lastDetail}). Respond ONLY with valid JSON matching the required schema — no prose, no code fences.`;
-    }
-
-    const result = await io.spawn(bin, args, { input, timeoutMs });
-    if (result.timedOut) {
-      throw new AgentRunnerError("timeout", `claude invocation timed out after ${timeoutMs}ms`, {
-        stderr: result.stderr,
-        output: result.stdout,
-      });
-    }
-    lastOutput = result.stdout;
-    lastStderr = result.stderr;
-
-    try {
-      const raw = extractResult(result);
-      return opts.schema.parse(raw);
-    } catch (err) {
-      if (err instanceof AgentRunnerError) throw err; // fatal — do not retry
-      lastDetail = err instanceof Error ? err.message : String(err);
-      // fall through to retry / final throw
-    }
-  }
-
-  throw new AgentRunnerError(
-    "validation",
-    `claude response failed schema validation after one retry: ${lastDetail}`,
-    { stderr: lastStderr, output: lastOutput },
+  return runWithCorrectiveRetry(
+    buildPrompt(caps, opts),
+    opts.schema,
+    async (input) => {
+      const result = await io.spawn(bin, args, { input, timeoutMs });
+      if (result.timedOut) {
+        throw new AgentRunnerError("timeout", `claude invocation timed out after ${timeoutMs}ms`, {
+          stderr: result.stderr,
+          output: result.stdout,
+        });
+      }
+      lastOutput = result.stdout;
+      lastStderr = result.stderr;
+      return extractResult(result);
+    },
+    (lastDetail) =>
+      new AgentRunnerError(
+        "validation",
+        `claude response failed schema validation after one retry: ${lastDetail}`,
+        { stderr: lastStderr, output: lastOutput },
+      ),
   );
 }
 

@@ -8,8 +8,10 @@ import {
   AgentRunnerError,
   DEFAULT_TIMEOUT_MS,
   defaultIo,
+  embedSchema,
   RetryableError,
   type RunnerIo,
+  runWithCorrectiveRetry,
   type SpawnResult,
   snippet,
   stripFence,
@@ -64,8 +66,12 @@ interface KiroSessionListing {
 export interface KiroEnv {
   io: RunnerIo;
   sleep: Sleep;
-  /** Make the per-run scratch dir; returns its absolute path. */
-  makeScratch(): string;
+  /**
+   * Make the per-run scratch dir; returns its absolute path. When `base` is
+   * given (the distill home's `runner-scratch/`), the dir is created under it
+   * (owner-only); otherwise it falls back to the OS temp dir.
+   */
+  makeScratch(base?: string): string;
   /** Best-effort remove a directory tree (the scratch dir). */
   removeScratch(dir: string): void;
   /** Write the no-tools agent config into `<cwd>/.kiro/agents/<name>.json`. */
@@ -78,15 +84,15 @@ export interface KiroEnv {
 
 /** Build the prompt with schema embedded and a self-recognition sentinel. */
 function buildKiroPrompt(opts: RunOptions<unknown>): string {
-  const json = JSON.stringify(toJsonSchema(opts.schema));
   // The sentinel rides as the first line so the extractor's K13 rejects the
   // session this call auto-saves (self-recognition guard); echoing it into the
-  // output is benign — it fails JSON.parse → corrective retry.
-  return (
+  // output is benign — it fails JSON.parse → corrective retry. The schema is
+  // ALWAYS embedded (kiro has no --json-schema / envelope) via the same
+  // shared wording the claude no-jsonSchema fallback uses.
+  const base =
     `${KIRO_DISTILL_SENTINEL}\n${opts.prompt}\n\n` +
-    "Do not use any tools; answer directly from the content provided.\n" +
-    `Respond ONLY with JSON matching this schema — no prose, no code fences:\n${json}`
-  );
+    "Do not use any tools; answer directly from the content provided.";
+  return embedSchema(base, JSON.stringify(toJsonSchema(opts.schema)));
 }
 
 /** Strip ANSI escapes and a leading `> ` prompt glyph kiro prints on stdout. */
@@ -95,6 +101,18 @@ function cleanKiroStdout(stdout: string): string {
   if (text.startsWith("> ")) text = text.slice(2).trim();
   else if (text.startsWith(">")) text = text.slice(1).trim();
   return text;
+}
+
+/** Mutable per-run cost accumulator (kiro prints `Credits: <n>` on stderr). */
+export interface KiroCost {
+  credits: number;
+}
+
+/** Best-effort: pull the `Credits: <n>` figure out of a stderr footer. */
+function parseCredits(stderr: string): number {
+  const m = stderr.match(/Credits:\s*([0-9]+(?:\.[0-9]+)?)/);
+  const n = m?.[1] ? Number.parseFloat(m[1]) : Number.NaN;
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -112,11 +130,13 @@ async function spawnAndParse(
   timeoutMs: number,
   cwd: string,
   env: KiroEnv,
+  cost?: KiroCost,
 ): Promise<unknown> {
   let last: SpawnResult | null = null;
   for (let attempt = 0; attempt <= KIRO_EMPTY_RETRIES; attempt++) {
     const result = await env.io.spawn(bin, args, { input, timeoutMs, cwd });
     last = result;
+    if (cost) cost.credits += parseCredits(result.stderr);
     if (result.timedOut) {
       throw new AgentRunnerError("timeout", `kiro-cli invocation timed out after ${timeoutMs}ms`, {
         stderr: result.stderr,
@@ -171,8 +191,12 @@ async function spawnAndParse(
  * cwd is EXACTLY the run's scratch dir, AND its title starts with the sentinel.
  * Never touches any other cwd group even if the listing returns several.
  * Best-effort: failures are swallowed (K13 still protects the corpus).
+ *
+ * Runs ONCE per distill run (via {@link AgentRunner.finalize}, after all
+ * concurrent workers join) — never mid-run, so one worker's cleanup can never
+ * list-and-delete a sibling worker's in-flight session.
  */
-async function cleanupScratchSessions(scratch: string, env: KiroEnv): Promise<void> {
+export async function cleanupScratchSessions(scratch: string, env: KiroEnv): Promise<void> {
   try {
     const groups = await env.listSessions(scratch);
     for (const group of groups) {
@@ -195,12 +219,14 @@ async function cleanupScratchSessions(scratch: string, env: KiroEnv): Promise<vo
  * Run one distill stage through kiro-cli. Resolves the binary, writes the
  * no-tools agent into the (shared) scratch cwd, then runs the shared
  * corrective-retry loop (max 2) around {@link spawnAndParse} (which itself
- * absorbs transient empty-stdout failures). Cleans up auto-saved sessions after.
+ * absorbs transient empty-stdout failures). Auto-saved sessions are cleaned up
+ * once per run by {@link cleanupScratchSessions} via the runner's `finalize`.
  */
 export async function runKiro<T>(
   opts: RunOptions<T>,
   scratchCwd: string,
   env: KiroEnv = defaultKiroEnv,
+  cost?: KiroCost,
 ): Promise<T> {
   const bin = await env.io.which("kiro-cli");
   if (!bin) throw new AgentRunnerError("missing-binary", KIRO_INSTALL_HINT);
@@ -210,32 +236,16 @@ export async function runKiro<T>(
   const args = ["chat", "--no-interactive", "--agent", KIRO_NO_TOOLS_AGENT];
   if (opts.model) args.push("--model", opts.model);
 
-  const basePrompt = buildKiroPrompt(opts);
-  let lastDetail = "";
-
-  try {
-    // Shared corrective-retry loop: on a parse/validation problem, retry ONCE
-    // with a corrective note (transport blips are already absorbed below).
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let input = basePrompt;
-      if (attempt === 1) {
-        input += `\n\nYour previous response could not be used (${lastDetail}). Respond ONLY with valid JSON matching the required schema — no prose, no code fences.`;
-      }
-      try {
-        const raw = await spawnAndParse(bin, args, input, timeoutMs, scratchCwd, env);
-        return opts.schema.parse(raw);
-      } catch (err) {
-        if (err instanceof AgentRunnerError) throw err; // fatal — do not retry
-        lastDetail = err instanceof Error ? err.message : String(err);
-      }
-    }
-    throw new AgentRunnerError(
-      "validation",
-      `kiro-cli response failed schema validation after one retry: ${lastDetail}`,
-    );
-  } finally {
-    await cleanupScratchSessions(scratchCwd, env);
-  }
+  return runWithCorrectiveRetry(
+    buildKiroPrompt(opts),
+    opts.schema,
+    (input) => spawnAndParse(bin, args, input, timeoutMs, scratchCwd, env, cost),
+    (lastDetail) =>
+      new AgentRunnerError(
+        "validation",
+        `kiro-cli response failed schema validation after one retry: ${lastDetail}`,
+      ),
+  );
 }
 
 // --- default environment (real fs + kiro-cli via the shared IO) ------------
@@ -268,7 +278,13 @@ async function kiroCapture(io: RunnerIo, args: string[], cwd: string): Promise<s
 export const defaultKiroEnv: KiroEnv = {
   io: defaultIo,
   sleep: realSleep,
-  makeScratch() {
+  makeScratch(base) {
+    // Home-scoped per the plan (<home>/runner-scratch/run-*): owner-only, easy
+    // to find/debug, and unique per run. OS tmpdir is the no-home fallback.
+    if (base) {
+      fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+      return fs.mkdtempSync(path.join(base, "run-"));
+    }
     return fs.mkdtempSync(path.join(os.tmpdir(), "cc-hindsight-kiro-"));
   },
   removeScratch(dir) {
@@ -280,7 +296,10 @@ export const defaultKiroEnv: KiroEnv = {
   },
   writeAgent: writeNoToolsAgent,
   async listSessions(cwd) {
-    const raw = await kiroCapture(defaultIo, ["--list-sessions", "--format", "json"], cwd);
+    // NB: --list-sessions/--delete-session are flags of the `chat` subcommand
+    // (verified against kiro-cli 2.12.1 — the top-level spelling is rejected
+    // with "may be valid in newer versions").
+    const raw = await kiroCapture(defaultIo, ["chat", "--list-sessions", "--format", "json"], cwd);
     try {
       const parsed = JSON.parse(stripVTControlCharacters(raw).trim());
       return Array.isArray(parsed) ? (parsed as KiroSessionListing[]) : [];
@@ -289,24 +308,26 @@ export const defaultKiroEnv: KiroEnv = {
     }
   },
   async deleteSession(sessionId) {
-    await kiroCapture(defaultIo, ["--delete-session", sessionId], process.cwd());
+    await kiroCapture(defaultIo, ["chat", "--delete-session", sessionId], process.cwd());
   },
 };
 
 /**
  * The kiro-cli backend as an {@link AgentRunner}. A single per-*run* scratch cwd
  * is created lazily on first use and reused by every stage call (unique per run
- * ⇒ per-cwd listing isolation, concurrency-safe), then removed when the process
- * exits. Session-store cleanup happens after each call via the scope invariant.
+ * ⇒ per-cwd listing isolation), then removed when the process exits.
+ * Session-store cleanup happens ONCE per run via `finalize` — after all
+ * concurrent workers join — under the deletion-scope invariant.
  */
-export function makeKiroRunner(env: KiroEnv = defaultKiroEnv): AgentRunner {
+export function makeKiroRunner(env: KiroEnv = defaultKiroEnv, scratchBase?: string): AgentRunner {
   let scratch: string | null = null;
+  const cost: KiroCost = { credits: 0 };
   const ensureScratch = (): string => {
     if (scratch === null) {
-      scratch = env.makeScratch();
-      // Best-effort remove the scratch dir on process exit (the auto-saved
-      // sessions are already cleaned per-call via the scope invariant; this is
-      // just tidying the local agent-config tmp dir, never corpus safety).
+      scratch = env.makeScratch(scratchBase);
+      // Best-effort remove the scratch dir on process exit (auto-saved sessions
+      // are cleaned by finalize under the scope invariant; this just tidies the
+      // local agent-config dir, never corpus safety).
       const dir = scratch;
       process.once("exit", () => env.removeScratch(dir));
     }
@@ -315,7 +336,12 @@ export function makeKiroRunner(env: KiroEnv = defaultKiroEnv): AgentRunner {
   return {
     name: "kiro",
     installHint: KIRO_INSTALL_HINT,
-    run: (opts) => runKiro(opts, ensureScratch(), env),
+    run: (opts) => runKiro(opts, ensureScratch(), env, cost),
+    costSummary: () =>
+      cost.credits > 0 ? `≈ ${cost.credits.toFixed(2)} Kiro credits used this run` : undefined,
+    finalize: async () => {
+      if (scratch !== null) await cleanupScratchSessions(scratch, env);
+    },
   };
 }
 
