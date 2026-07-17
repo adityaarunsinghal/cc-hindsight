@@ -1,13 +1,16 @@
 {
   "name": "cc-hindsight",
   "version": "1.0.2",
-  "description": "Mine your Claude Code session history into a oneshot prompt library and CLAUDE.md preferences. The prompt you'd write if you knew then what you know now.",
+  "description": "Mine your coding-agent session history (Claude Code, kiro-cli) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
   "license": "MIT",
   "keywords": [
     "claude",
     "claude-code",
+    "kiro",
+    "kiro-cli",
+    "agents",
     "prompt",
     "prompt-library",
     "prompt-engineering",

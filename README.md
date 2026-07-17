@@ -9,15 +9,15 @@
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/adityaarunsinghal/cc-hindsight/main/.github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from Claude Code session history" width="800">
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/cc-hindsight/main/.github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from coding-agent session history" width="800">
 </p>
 
 ```bash
 npx cc-hindsight
 ```
 
-cc-hindsight mines your Claude Code session history into two things you can use
-tomorrow morning:
+cc-hindsight mines your coding-agent session history (Claude Code, kiro-cli)
+into two things you can use tomorrow morning:
 
 1. **A oneshot prompt library.** For each real task you've done, the realistic
    ideal *first* prompt: everything you knew and wanted at t=0 but didn't say,
@@ -38,9 +38,10 @@ project instead of stating them once, upfront, where every future session reads
 them from the first message.
 
 All the evidence of what you *should* have said is already on disk. Claude Code
-saves every session as JSONL under `~/.claude/projects/`. Plenty of tools read
-that data for dashboards and transcripts. **Nobody closes the loop from history
-back to better prompting.**
+saves every session as JSONL under `~/.claude/projects/`; kiro-cli keeps its
+own store under `~/.kiro/sessions/cli`. Plenty of tools read that data for
+dashboards and transcripts. **Nobody closes the loop from history back to
+better prompting.**
 
 **Before** (what you actually typed at t=0):
 
