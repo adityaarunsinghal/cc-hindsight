@@ -22,8 +22,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Preferences targets.** `preferences --target claude|kiro|agents` emits a
   `CLAUDE.md` block, a `~/.kiro/steering/` file, or a portable `AGENTS.md`
   section (default inferred from `--source`).
+- **Source-aware distill prompts.** Digest/cluster/author prompts name each
+  session's backend (neutral "coding-agent" for merged corpora) and only
+  explain the `[decision]`/`[command]`/`[image pasted]` legend for sources
+  that produce it; `DIGEST/CLUSTER/AUTHOR_PROMPT_VERSION` bumped (claude-origin
+  prompt text unchanged).
+- **Observability.** Non-text kiro Prompt blocks render the `[image pasted]`
+  placeholder or an explicit drop (K11); Compaction-snapshot-only prompts are
+  recorded as drops (K12); orphan kiro `.history` files (transcript deleted)
+  are surfaced by `scan`/`status`; merged `--source auto` runs print a
+  one-time notice with the `--source claude` escape; `status` breaks the
+  discovered count down per source; the kiro runner reports total
+  `Credits:` spent per distill run.
 - `docs/kiro-backend.md` documenting the on-disk format and the runner's
-  verified behavior.
+  verified behavior (incl. a 399,868-char stdin round-trip probe).
 
 ### Changed
 

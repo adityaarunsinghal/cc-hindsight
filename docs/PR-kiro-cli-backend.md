@@ -73,7 +73,7 @@ npm run lint && npm run typecheck && npm test && npm run build \
   && npm pack --dry-run --json > pack.json && node scripts/check-pack.mjs pack.json
 ```
 
-- 23 test files, **333 tests passing** (1 todo), lint/typecheck/build/pack all
+- 25 test files, **371 tests passing** (1 todo), lint/typecheck/build/pack all
   green (the exact prepublish/CI sequence).
 - **Byte-parity against upstream v1.0.2**: both versions were run over the
   same frozen real Claude store (302 sessions, 61 exported). Every exported
@@ -102,10 +102,12 @@ npm run lint && npm run typecheck && npm test && npm run build \
 - [x] No new runtime dependency (the tree stays at three;
       `stripVTControlCharacters` and `mkdtemp` are node builtins).
 - [x] Extraction changes add regression fixtures (`test/fixtures/kiro-extract/`,
-      `test/fixtures/kiro-home/`); the Claude fixtures are untouched and green.
-- [x] No distill prompt text changed in this branch, so no `*_PROMPT_VERSION`
-      bump (see known gaps — source-aware prompt copy is a follow-up that will
-      carry its own bumps).
+      `test/fixtures/kiro-home/`, `test/fixtures/kiro-home-dedupe/`); the
+      Claude fixtures are untouched and green.
+- [x] The distill prompts gained source-aware copy, so
+      `DIGEST/CLUSTER/AUTHOR_PROMPT_VERSION` were bumped (2/3/3) with contract
+      tests updated in the same branch (`test/prompts-source-aware.test.ts`);
+      claude-origin prompt text is unchanged.
 - [x] No LLM call runs outside the consent gate; consent copy names whichever
       CLI will actually run (`claude` copy is byte-identical to before).
 - [x] Conventional Commits throughout (7 commits matching the plan's map).
@@ -118,36 +120,66 @@ npm run lint && npm run typecheck && npm test && npm run build \
    timeline map is keyed by `sourcePath` (the same unique key the old
    `linesBySource` map used), and the byte-parity run above is the
    end-to-end proof.
-2. **Runner cleanup timing**: cleanup runs after each call (in `finally`)
-   rather than once at distill end. Under `--concurrency 3` one worker's
-   cleanup may delete a sibling's in-flight auto-saved session (same scratch
-   cwd + sentinel title). Believed harmless — kiro-cli holds its
-   conversation in memory and the session would be deleted moments later
-   anyway — and the scope invariant guarantees user sessions are never
-   touched. Flagging because the plan originally specified once-after-join.
+2. **Runner cleanup timing**: session-store cleanup runs ONCE per run via
+   `AgentRunner.finalize`, invoked at every terminal point after stage calls
+   began — after all concurrent workers join, so one worker's cleanup can
+   never list-and-delete a sibling's in-flight session. The deletion-scope
+   invariant (exact scratch cwd + sentinel title) is pinned by mocked tests.
 3. **kiro-cli is auth-gated and auto-updating** — CI cannot exercise the real
    binary. The mocked tests + `docs/kiro-backend.md` (verified against
    kiro-cli 2.12.1) are the containment; we offer to be maintainer-of-record
    for the kiro runner path.
 
-### Known gaps (deliberate, tracked as follow-ups)
+### Follow-up round (all previously-listed gaps closed)
 
-- **Source-aware distill prompt copy (plan W5)**: digest/cluster prompts still
-  say "Claude Code session" for kiro-sourced content, and the
-  `[decision]`/`[command]`/`[image pasted]` legend is included regardless of
-  source. Mechanically harmless (the content itself is source-agnostic) but
-  the copy should be parameterized, with prompt-version bumps, in a follow-up.
-- Two residual Claude-branded copy surfaces: `copy.ts` ("paste it into a fresh
-  Claude Code session.") and `status.ts` ("(claude dir not found)"); the
-  status `discovered` line does not yet show a `(Y claude, Z kiro)` breakdown.
-- Observability niceties from the plan's review round: a placeholder + `Drop`
-  for a hypothetical non-text kiro Prompt block (0/410 observed), a `Drop` for
-  Compaction-snapshot-only prompts, and surfacing orphan `.history` files
-  (transcript deleted) in scan/status.
-- `Credits: <n>` stderr parsing for a per-run cost total (nice-to-have).
-- Fixture backlog: hybrid rewind-with-history classification (the precedence
-  code handles it; add the companion-triple fixture), `/chat load`
-  `imported_from` dedupe fixture, a sentinel-echo negative fixture, and a
-  direct unit test that `boundary` events stop antecedent/decision search.
-- stdin prompt delivery is probe-verified to 150 KB; one budget-sized
-  (400k-char) verification call should be run before heavy production use.
+A remediation pass closed every gap the original audit listed:
+
+- **Source-aware distill prompts** (digest/cluster/author): the prompt names
+  each session's backend ("Kiro CLI session", neutral "coding-agent" for
+  merged corpora) and the `[decision]`/`[command]`/`[image pasted]` legend is
+  explained only for sources that can produce it. Claude-origin prompts are
+  byte-compatible with the previous copy. `DIGEST/CLUSTER/AUTHOR_PROMPT_VERSION`
+  bumped (2/3/3) with contract tests, including a mixed-origin task test.
+- **Copy surfaces**: `copy.ts` paste hint is backend-neutral; `status.ts`'s
+  vestigial "(claude dir not found)" replaced; the status `discovered` line
+  gains a `(N claude, M kiro)` breakdown when both stores are active; help
+  text de-branded (`scan`, `preferences`, per-runner-call flags).
+- **Observability**: K11 — a non-text kiro Prompt block now yields the R11
+  placeholder (`[image pasted]`) or an explicit `Drop` (never silent); K12 —
+  a Compaction-snapshot prompt that never appears live is recorded as a
+  `Drop("K12: snapshot-only prompt")`; orphan `.history` files (transcript
+  deleted) are surfaced by `scan` and `status`.
+- **Runner**: the corrective-retry loop and schema embedding are now shared
+  (`runWithCorrectiveRetry`/`embedSchema` in `runners/shared.ts`); session
+  cleanup moved from per-call to ONCE per run via `AgentRunner.finalize`
+  (after all concurrent workers join — removing the cross-worker deletion
+  race); the scratch cwd is home-scoped (`<home>/runner-scratch/run-*`,
+  owner-only) with an OS-tmpdir fallback; explicit `--runner claude|kiro`
+  fails at RESOLVE time (before consent) when the binary is missing; the kiro
+  `Credits:` stderr footer is accumulated and reported in the distill summary.
+- **Registry**: `--source auto` now requires a store to hold ≥1 project;
+  merged runs print a one-time notice (`including N kiro session(s); use
+  --source claude to restore the claude-only scope`).
+- **Fixtures/tests**: hybrid rewind-with-history classification (K2 step-1
+  precedence over the parent link), `/chat load` `imported_from` dedupe
+  (copied keys owned by the original), sentinel-echo negative runner test,
+  anaphora boundary-stop unit tests, orphan-history fixtures, runner-registry
+  tests. Suite: 371 tests across 25 files.
+- **400k-char stdin probe (P2 exit criterion)**: a 399,868-char prompt with a
+  tail needle round-tripped through `kiro-cli chat --no-interactive` (needle
+  echoed exactly, exit 0). The probe also caught a REAL BUG: in kiro-cli
+  2.12.1 `--list-sessions`/`--delete-session` are flags of the `chat`
+  subcommand — the runner's cleanup helpers previously invoked them top-level
+  and would have silently no-oped. Fixed and re-verified end-to-end
+  (created → listed → deleted → listing empty). Also documented: headless
+  one-shot sessions persist to the "classic"/v1 store in 2.12.1, which v2
+  flat-dir discovery never reads — an extra feedback-loop layer on top of the
+  scope invariant and K13.
+
+### Remaining accepted limitations
+
+- Slash-command fidelity: kiro loses R10-style `[command]` recovery by design
+  (commands never reach the transcript) — documented in
+  `docs/kiro-backend.md`, not a bug.
+- kiro-cli is auth-gated and auto-updating — CI cannot exercise the real
+  binary; mocked tests + the probe-fact document are the containment.

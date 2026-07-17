@@ -82,8 +82,10 @@ automation excluded, 14 empty), and the export is byte-identical on re-run
 The distill runner drives `kiro-cli chat --no-interactive --agent
 <no-tools-agent>`, prompt on stdin. Verified probe facts:
 
-- **stdin delivery** works for multi-line prompts up to 150 KB (needle echoed
-  back, exit 0, credits charged).
+- **stdin delivery** works for multi-line prompts up to 150 KB, and was
+  re-verified at the full default input budget: a **399,868-char** prompt with
+  a tail needle round-tripped (needle echoed back exactly, exit 0,
+  `Credits: 1.94`).
 - **Tool suppression** via a local agent config
   (`<cwd>/.kiro/agents/cc-hindsight-distill.json` with `"tools": []`,
   `"mcpServers": {}`) discovered from the spawn cwd — the model reports
@@ -98,15 +100,19 @@ The distill runner drives `kiro-cli chat --no-interactive --agent
   → bounded backoff (2 extra attempts, same input, *no* corrective note) beneath
   the shared corrective retry. Non-zero exit is a fatal `cli-error`.
 - **Session side effects:** every run (including failed ones) auto-saves a
-  session in the flat store. The runner spawns from a per-run scratch cwd and,
-  after each call, deletes only the sessions in that scratch-cwd group whose
-  title starts with the sentinel — the **deletion-safety invariant** (never
-  touches any other cwd group even if the listing returns several). K13 is the
-  defense-in-depth backstop if a deletion is missed.
+  session keyed to the spawn cwd (in 2.12.1, headless one-shot runs land in
+  the "classic"/v1 store per the listing's `source` field — which the v2
+  flat-dir *discovery* never reads, an extra layer of feedback-loop
+  protection). The runner spawns from a per-run scratch cwd and, once per run
+  (after all workers join), deletes only the sessions in that scratch-cwd
+  group whose title starts with the sentinel — the **deletion-safety
+  invariant** (never touches any other cwd group even if the listing returns
+  several). K13 is the defense-in-depth backstop if a deletion is missed.
 
-`--list-sessions --format json` (per cwd), `--delete-session <id>`,
-`--list-models --format json`, and `--model` were all used/verified in building
-this.
+`chat --list-sessions --format json` (per cwd), `chat --delete-session <id>`
+(both are flags of the `chat` subcommand in 2.12.1 — the top-level spelling is
+rejected), `--list-models --format json`, and `--model` were all used/verified
+in building this (probe run: created → listed → deleted → listing empty).
 
 ## Maintainer note
 
