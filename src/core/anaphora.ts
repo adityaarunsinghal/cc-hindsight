@@ -28,8 +28,8 @@
  * test/anaphora.test.ts.
  */
 
+import type { TimelineEvent } from "../sources/types.js";
 import type { CorpusSession } from "./dedupe.js";
-import { extractTimeline, type TimelineEvent } from "./extract.js";
 
 /** Human turns with at most this many whitespace tokens get a record. */
 export const SHORT_TURN_MAX_WORDS = 15;
@@ -86,6 +86,10 @@ function messageKey(timestamp: string, text: string): string {
 function findAntecedent(timeline: TimelineEvent[], humanPos: number): string | null {
   for (let j = humanPos - 1; j >= 0; j--) {
     const event = timeline[j];
+    // A context reset (`/clear`, `/compact`) is a hard wall: the model never
+    // saw anything before it, so neither should an antecedent search. Claude
+    // Code emits no boundary events, so this is a no-op there.
+    if (event?.kind === "boundary") return null;
     if (event?.kind === "assistant") return tail(event.text);
   }
   return null;
@@ -104,6 +108,9 @@ function findDecision(
 ): { kind: DecisionKind; text: string } | null {
   for (let j = humanPos - 1; j > prevHumanPos; j--) {
     const event = timeline[j];
+    // A context reset closes the pending-decision window: a plan/question
+    // issued before it is no longer pending for this human turn.
+    if (event?.kind === "boundary") return null;
     if (event?.kind === "plan") return { kind: "plan", text: event.text };
     if (event?.kind === "question") return { kind: "question", text: event.text };
   }
@@ -115,14 +122,13 @@ function findDecision(
  * post-dedupe indices.
  *
  * `session` supplies the surviving (owned) messages and their alignment indices;
- * `lines` are that session file's raw JSONL, walked once into a timeline so the
- * antecedent and decision windows see the full conversation (assistant turns,
- * plans, questions, and even fork-copied human turns) — while records are only
- * emitted for short human turns THIS session owns.
+ * `timeline` is that session file's full event stream (produced once by the
+ * owning SessionSource) so the antecedent and decision windows see the full
+ * conversation (assistant turns, plans, questions, and even fork-copied human
+ * turns) — while records are only emitted for short human turns THIS session
+ * owns.
  */
-export function buildAnaphora(session: CorpusSession, lines: string[]): AnaphoraRecord[] {
-  const timeline = extractTimeline(lines);
-
+export function buildAnaphora(session: CorpusSession, timeline: TimelineEvent[]): AnaphoraRecord[] {
   // Owned (survived dedupe here) key → post-dedupe index. First occurrence wins,
   // matching dedupe's keep-the-first-in-file-order behavior.
   const ownedIndex = new Map<string, number>();

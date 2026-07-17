@@ -1,0 +1,4 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"add a dark mode toggle to the settings page"}],"meta":{"timestamp":1784000000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[{"kind":"text","data":"I'll add a toggle."},{"kind":"toolUse","data":{"name":"fs_write"}}]}}
+{"version":"v1","kind":"ToolResults","data":{"message_id":"m3","content":[{"kind":"toolResult","data":{"toolUseId":"t1","content":[{"kind":"json","data":{"exit_status":"0"}}]}}],"results":{}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m4","content":[{"kind":"text","data":"yes"}],"meta":{"timestamp":1784000600}}}

@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"b1","content":[{"kind":"text","data":"write an integration test for the login endpoint"}],"meta":{"timestamp":1784002000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"b2","content":[{"kind":"text","data":"Done."}]}}

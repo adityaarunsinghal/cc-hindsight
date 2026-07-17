@@ -1,4 +1,5 @@
 import type { OutcomeEvidence } from "../../core/outcome.js";
+import type { SourceName } from "../../sources/types.js";
 
 /**
  * Stage 1 — digest prompt builder.
@@ -9,10 +10,20 @@ import type { OutcomeEvidence } from "../../core/outcome.js";
  * (core/budget.ts) — this builder inlines whatever content it is handed,
  * which the pipeline has already kept within budget (or blocked).
  *
+ * The prompt is source-aware: the session is named after its backend, and the
+ * `[decision]`/`[command]`/`[image pasted]` legend is explained only for
+ * sources that can produce those lines (Claude Code); kiro exports omit it.
+ * A claude-origin prompt is byte-identical to the pre-multi-backend text.
+ *
  * `DIGEST_PROMPT_VERSION` is recorded in provenance downstream and MUST be
  * bumped on any meaningful change to the prompt text.
  */
-export const DIGEST_PROMPT_VERSION = 1;
+export const DIGEST_PROMPT_VERSION = 2;
+
+/** Human-facing name of a session's source backend. */
+export function sourceLabel(origin: SourceName | undefined): string {
+  return origin === "kiro" ? "Kiro CLI" : "Claude Code";
+}
 
 /** Input to {@link buildDigestPrompt}. */
 export interface DigestPromptInput {
@@ -22,6 +33,8 @@ export interface DigestPromptInput {
   content: string;
   /** Bounded outcome evidence captured by the export pass (may be absent). */
   outcome?: OutcomeEvidence;
+  /** Which backend produced the session (absent ⇒ claude, the old-manifest rule). */
+  origin?: SourceName;
 }
 
 /**
@@ -33,12 +46,22 @@ export interface DigestPromptInput {
 export function buildDigestPrompt(input: DigestPromptInput): string {
   const parts: string[] = [];
 
+  // Legend lines only for sources that can produce them: kiro transcripts
+  // carry no [decision]/[command] surfaces (no AskUserQuestion equivalent;
+  // slash commands never reach the transcript).
+  const legend =
+    input.origin === "kiro"
+      ? [`(file: ${input.exportName}).`]
+      : [
+          `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
+          "human's verbatim option choices; [command] lines are slash commands they ran;",
+          "[image pasted] marks visual context they supplied.",
+        ];
+
   parts.push(
-    "You are analyzing one Claude Code session to produce a structured digest.",
+    `You are analyzing one ${sourceLabel(input.origin)} session to produce a structured digest.`,
     "The transcript below contains ONLY the human's messages from the session",
-    `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
-    "human's verbatim option choices; [command] lines are slash commands they ran;",
-    "[image pasted] marks visual context they supplied.",
+    ...legend,
     "",
     "Produce a JSON digest with:",
     '- "goal": the underlying goal the human was pursuing, one sentence.',

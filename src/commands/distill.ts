@@ -21,6 +21,10 @@ import {
   runClusterStage,
   runDigestStage,
 } from "../distill/pipeline.js";
+import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
+import type { AgentRunner } from "../runners/types.js";
+import { parseSourceMode } from "../sources/registry.js";
+import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
 import { bold, cyan, dim, green, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
@@ -36,6 +40,11 @@ import type { ManifestEntry } from "./export.js";
 export interface DistillArgs {
   home?: string;
   "claude-dir"?: string;
+  "kiro-dir"?: string;
+  /** Which backend(s) to distill from: claude, kiro, or auto (default auto). */
+  source?: string;
+  /** Which local CLI distills: claude, kiro, or auto (default auto). */
+  runner?: string;
   project?: string;
   /** citty maps `--no-group` to `group: false`; grouping is on by default. */
   group?: boolean;
@@ -68,9 +77,20 @@ export interface ComputedPlan {
  */
 export function computePlan(
   entries: ManifestEntry[],
-  inputs: { project?: string; minSubstance: number; noGroup: boolean },
+  inputs: {
+    project?: string;
+    minSubstance: number;
+    noGroup: boolean;
+    /** Origins to include; entries from other backends are filtered out. Absent ⇒ all. */
+    activeOrigins?: Set<string>;
+  },
 ): ComputedPlan {
   let eligible = entries;
+  // Origin filter: a manifest written before the multi-backend seam has no
+  // `origin` ⇒ treat as "claude" (the old-manifest rule).
+  if (inputs.activeOrigins) {
+    eligible = eligible.filter((e) => inputs.activeOrigins?.has(e.origin ?? "claude"));
+  }
   if (inputs.project) {
     const needle = inputs.project.toLowerCase();
     eligible = eligible.filter((e) => (e.project ?? "").toLowerCase().includes(needle));
@@ -159,6 +179,11 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   const { home } = resolvePaths(args);
   const manifestPath = path.join(home, "exports", "manifest.json");
+  const sourceMode = parseSourceMode(args.source);
+  // Which origins the distill plan should consider — a --source claude/kiro run
+  // narrows the (possibly merged) manifest to that backend; auto keeps both.
+  const activeOrigins: Set<SourceName> | undefined =
+    sourceMode === "auto" ? undefined : new Set<SourceName>([sourceMode]);
 
   // We can prompt when there's a stream to prompt on: an injected input (tests)
   // or a real interactive stdin. In a pipe/CI without --yes we deliberately do
@@ -179,11 +204,18 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       write(hint("cc-hindsight export"));
       return 1;
     }
+    // Name the store(s) the offered export will read, per --source.
+    const reads =
+      sourceMode === "kiro"
+        ? "~/.kiro"
+        : sourceMode === "claude"
+          ? "~/.claude"
+          : "~/.claude and ~/.kiro";
     const doExport =
       Boolean(args.yes) ||
       (canPrompt &&
         (await askYesNo(
-          "No exports yet. Run export now? (reads ~/.claude, writes ~/.cc-hindsight; no LLM, nothing sent anywhere)",
+          `No exports yet. Run export now? (reads ${reads}, writes ~/.cc-hindsight; no LLM, nothing sent anywhere)`,
           { input: deps.input, output: deps.output, defaultYes: true },
         )));
     if (!doExport) {
@@ -196,6 +228,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     runExport({
       home: args.home,
       "claude-dir": args["claude-dir"],
+      "kiro-dir": args["kiro-dir"],
+      source: args.source,
       project: args.project,
       output: deps.output,
     } satisfies ExportArgs);
@@ -223,13 +257,48 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   const budget = resolveInputBudget(args["input-budget"]);
   const truncate = resolveTruncatePolicy(args.truncate);
   const timeoutMs = resolveTimeoutMs(args.timeout);
-  const plan = computePlan(entries, { project: args.project, minSubstance, noGroup });
+  const plan = computePlan(entries, {
+    project: args.project,
+    minSubstance,
+    noGroup,
+    activeOrigins,
+  });
 
   if (plan.digests === 0) {
     const scope = args.project ? ` in project "${args.project}"` : "";
     write(`nothing to distill: no sessions with ≥ ${minSubstance} human messages${scope}.`);
     return 0;
   }
+
+  // Resolve which local CLI distills. Default `auto`: prefer the runner matching
+  // the active source, else fall back by binary availability. A kiro-only
+  // machine (no `claude` binary) works out of the box. An EXPLICIT --runner
+  // whose binary is missing fails here — before consent — with its install
+  // hint. An injected deps.runner (tests) bypasses resolution and leaves the
+  // consent copy at its claude default.
+  let resolvedRunner: AgentRunner | null = null;
+  if (!deps.runner) {
+    try {
+      resolvedRunner = await resolveRunner(parseRunnerMode(args.runner), {
+        preferSource: sourceMode === "auto" ? undefined : sourceMode,
+        scratchBase: path.join(home, "runner-scratch"),
+      });
+    } catch (err) {
+      write((err as Error).message);
+      return 1;
+    }
+  }
+  const runner: RunnerFn = deps.runner ?? (resolvedRunner as AgentRunner).run;
+  const runnerName: DistillPlan["runnerName"] = resolvedRunner?.name;
+
+  // Once-per-run runner teardown, called at every terminal point AFTER stage
+  // calls began: all concurrent workers have joined by then, so the kiro
+  // runner's session cleanup can never race an in-flight sibling (deletion
+  // happens once per run, per the scope invariant). Best-effort by contract.
+  const finishRun = async (code: number): Promise<number> => {
+    await resolvedRunner?.finalize?.();
+    return code;
+  };
 
   // Consent-time (pre-spend) overflow estimate.
   const oversized = computeOversized(home, plan.eligible, budget);
@@ -275,6 +344,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     digests: plan.digests,
     cluster: plan.cluster,
     authorEstimate: plan.authorEstimate,
+    runnerName,
     resumeNote: computeResumeNote(home, plan, Boolean(args.fresh)),
     budget,
     truncate,
@@ -330,7 +400,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     home,
     entries: plan.eligible,
     model: args.model,
-    runner: deps.runner,
+    runner,
     output: deps.output,
     budget,
     truncate,
@@ -380,7 +450,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   if (Object.keys(digestsForCluster).length === 0) {
     write();
     write("no sessions were successfully digested; nothing to cluster.");
-    return 1;
+    return finishRun(1);
   }
 
   // Track whether ANY failure occurred so the command exits non-zero after
@@ -391,13 +461,18 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   write(`cluster — ${noGroup ? "--no-group" : "1 call"}:`);
 
   try {
+    // Backend per export (absent ⇒ claude): names the corpus in the cluster
+    // prompt (named single-source, neutral for merged corpora).
+    const clusterOrigins: Record<string, SourceName> = {};
+    for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
     const clusterResult = await runClusterStage({
       home,
       digests: digestsForCluster,
+      origins: clusterOrigins,
       generation: digestResult.generation,
       noGroup,
       model: args.model,
-      runner: deps.runner,
+      runner,
       output: deps.output,
       budget,
       timeoutMs,
@@ -417,7 +492,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       generation: digestResult.generation,
       toolVersion: pkg.version,
       model: args.model,
-      runner: deps.runner,
+      runner,
       output: deps.output,
       budget,
       truncate,
@@ -449,6 +524,12 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       hadFailure = true;
     }
 
+    // Best-effort cost visibility (kiro prints a Credits footer per call).
+    const costLine = resolvedRunner?.costSummary?.();
+    if (costLine) {
+      write(dim(costLine));
+    }
+
     // Offer to show the freshly-built library — the payoff of the one-shot flow
     // is watching it appear. Pure local display (no cost), so the default is
     // yes; --yes shows it without prompting; a pipe/CI without --yes just skips.
@@ -474,20 +555,20 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           );
           write(hint("cc-hindsight show <slug>"));
           write(hint("cc-hindsight copy <slug>"));
-          return hadFailure ? 1 : 0;
+          return finishRun(hadFailure ? 1 : 0);
         }
       }
     }
   } catch (err) {
     write(`  ✗ ${(err as Error).message}`);
     write("  digest progress is checkpointed; re-run to retry clustering.");
-    return 1;
+    return finishRun(1);
   }
 
   write(hint("cc-hindsight list"));
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
-  return hadFailure ? 1 : 0;
+  return finishRun(hadFailure ? 1 : 0);
 }
 
 export default defineCommand({
@@ -508,13 +589,17 @@ export default defineCommand({
       default: "2",
       description: "Minimum human messages for a session to be eligible",
     },
-    model: { type: "string", description: "Model passed through to `claude --model`" },
+    model: { type: "string", description: "Model passed through to the runner's --model" },
+    runner: {
+      type: "string",
+      description: "Which local CLI distills: claude, kiro, or auto (default: auto)",
+    },
     fresh: { type: "boolean", description: "Reset distill checkpoints and start over" },
     "dry-run": { type: "boolean", description: "Print the invocation plan and exit; run nothing" },
     yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
     "input-budget": {
       type: "string",
-      description: "Max characters of session content per claude call (default 400000)",
+      description: "Max characters of session content per runner call (default 400000)",
     },
     truncate: {
       type: "string",
@@ -523,7 +608,7 @@ export default defineCommand({
     },
     timeout: {
       type: "string",
-      description: "Per-claude-call timeout in seconds (default 300)",
+      description: "Per-runner-call timeout in seconds (default 300)",
     },
     concurrency: {
       type: "string",

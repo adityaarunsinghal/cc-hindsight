@@ -18,7 +18,7 @@ import type { Digest } from "../schemas.js";
  * `CLUSTER_PROMPT_VERSION` is recorded in provenance downstream; bump it on
  * any meaningful change to the prompt text.
  */
-export const CLUSTER_PROMPT_VERSION = 2;
+export const CLUSTER_PROMPT_VERSION = 3;
 
 /** Render one digest as a compact labeled block. */
 function renderDigest(exportName: string, digest: Digest): string {
@@ -35,17 +35,26 @@ function renderDigest(exportName: string, digest: Digest): string {
 /**
  * Build the stage-2 clustering prompt from the digests of every eligible
  * session (keyed by export file name — those names are the member ids the
- * response must use).
+ * response must use). `origins` names each session's backend (absent entries
+ * ⇒ claude): a single-backend corpus is named ("Claude Code" / "Kiro CLI"),
+ * a merged corpus goes neutral ("coding-agent").
  */
-export function buildClusterPrompt(digests: Record<string, Digest>): string {
+export function buildClusterPrompt(
+  digests: Record<string, Digest>,
+  origins?: Record<string, "claude" | "kiro">,
+): string {
   const ids = Object.keys(digests);
   const blocks = ids.map((id) => {
     const digest = digests[id];
     return digest ? renderDigest(id, digest) : `- id: ${id}`;
   });
 
+  const originSet = new Set(ids.map((id) => origins?.[id] ?? "claude"));
+  const sourceNoun =
+    originSet.size > 1 ? "coding-agent" : originSet.has("kiro") ? "Kiro CLI" : "Claude Code";
+
   return [
-    "You are grouping Claude Code sessions into semantic tasks for a personal",
+    `You are grouping ${sourceNoun} sessions into semantic tasks for a personal`,
     "prompt library. Below are structured digests of every session, each with a",
     "unique id (its export file name).",
     "",

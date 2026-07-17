@@ -19,7 +19,7 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change
  * (including changes to the response schema the model is held to).
  */
-export const AUTHOR_PROMPT_VERSION = 2;
+export const AUTHOR_PROMPT_VERSION = 3;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
@@ -31,6 +31,8 @@ export interface AuthorMemberInput {
   digest?: Digest;
   /** Resolved short-turn records for this session. */
   anaphora?: AnaphoraRecord[];
+  /** Which backend produced the session (absent ⇒ claude, the old-manifest rule). */
+  origin?: "claude" | "kiro";
 }
 
 /** Input to {@link buildAuthorPrompt}. */
@@ -93,6 +95,19 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
     .map((m) => `${m.exportName}: ${m.digest?.outcome ?? "unclear"}`)
     .join(", ");
 
+  // Legend bullets only when a member can actually contain those lines
+  // (Claude Code exports; kiro transcripts have no [decision]/[command]
+  // surfaces). An all-claude task is byte-identical to the pre-multi-backend
+  // prompt; a mixed task keeps the bullets for its claude members.
+  const hasClaudeMember = input.members.some((m) => (m.origin ?? "claude") === "claude");
+  const legendBullets = hasClaudeMember
+    ? [
+        "- [decision] lines are the human's verbatim choices — honor them;",
+        "- [command] and [image pasted] lines show how they actually prompted (mention",
+        "  supplying a screenshot if that was part of the task).",
+      ]
+    : [];
+
   return [
     "You are authoring the realistic ideal first prompt for a task a human already",
     "completed with a coding agent — the prompt they WOULD have written at the very",
@@ -142,9 +157,7 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
     "  below (terse if they're terse) — never an asserted persona;",
     "- never copy assistant prose into the oneshot — assistant text appears below",
     "  only to resolve what short replies referred to;",
-    "- [decision] lines are the human's verbatim choices — honor them;",
-    "- [command] and [image pasted] lines show how they actually prompted (mention",
-    "  supplying a screenshot if that was part of the task).",
+    ...legendBullets,
     "",
     "CONFIDENCE — judge from the outcomes above:",
     '- "high" when member sessions completed;',

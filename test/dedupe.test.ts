@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { buildCorpus, type DedupeInput } from "../src/core/dedupe.js";
+import { extractMessages } from "../src/core/extract.js";
+
+/**
+ * Build a DedupeInput from raw lines. `buildCorpus` now takes pre-extracted
+ * sessions (extraction is a SessionSource concern), so tests extract with the
+ * claude extractor here — exactly what the export command does upstream.
+ */
+function di(d: {
+  project: string;
+  sessionId: string;
+  sourcePath: string;
+  lines: string[];
+}): DedupeInput {
+  const { lines, ...rest } = d;
+  return { ...rest, extracted: extractMessages(lines) };
+}
 
 /** A minimal human `user` entry JSONL line. */
 function userLine(timestamp: string, text: string): string {
@@ -26,13 +42,13 @@ const T4 = "2026-01-01T01:01:00.000Z";
  * message at a NEW timestamp.
  */
 function forkPair(): DedupeInput[] {
-  const sessionA: DedupeInput = {
+  const sessionA = di({
     project: "proj",
     sessionId: "sess-a",
     sourcePath: "/tmp/sess-a.jsonl",
     lines: [userLine(T1, "hello"), assistantLine(T2, "hi"), userLine(T2, "world")],
-  };
-  const sessionB: DedupeInput = {
+  });
+  const sessionB = di({
     project: "proj",
     sessionId: "sess-b",
     sourcePath: "/tmp/sess-b.jsonl",
@@ -42,7 +58,7 @@ function forkPair(): DedupeInput[] {
       userLine(T3, "brand new instruction"), // genuinely new → survives
       userLine(T4, "hello"), // deliberate re-send (new ts) → survives
     ],
-  };
+  });
   return [sessionA, sessionB];
 }
 
@@ -89,9 +105,9 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
 
   it("orders sessions by earliest message timestamp, then sessionId", () => {
     const inputs: DedupeInput[] = [
-      { project: "p", sessionId: "z-late", sourcePath: "/z", lines: [userLine(T3, "c")] },
-      { project: "p", sessionId: "a-early", sourcePath: "/a", lines: [userLine(T1, "a")] },
-      { project: "p", sessionId: "m-mid", sourcePath: "/m", lines: [userLine(T2, "b")] },
+      di({ project: "p", sessionId: "z-late", sourcePath: "/z", lines: [userLine(T3, "c")] }),
+      di({ project: "p", sessionId: "a-early", sourcePath: "/a", lines: [userLine(T1, "a")] }),
+      di({ project: "p", sessionId: "m-mid", sourcePath: "/m", lines: [userLine(T2, "b")] }),
     ];
     const corpus = buildCorpus(inputs);
     expect(corpus.sessions.map((s) => s.sessionId)).toEqual(["a-early", "m-mid", "z-late"]);
@@ -99,8 +115,8 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
 
   it("breaks earliest-timestamp ties on sessionId lexicographically", () => {
     const inputs: DedupeInput[] = [
-      { project: "p", sessionId: "sess-b", sourcePath: "/b", lines: [userLine(T1, "shared")] },
-      { project: "p", sessionId: "sess-a", sourcePath: "/a", lines: [userLine(T1, "shared")] },
+      di({ project: "p", sessionId: "sess-b", sourcePath: "/b", lines: [userLine(T1, "shared")] }),
+      di({ project: "p", sessionId: "sess-a", sourcePath: "/a", lines: [userLine(T1, "shared")] }),
     ];
     const corpus = buildCorpus(inputs);
     // sess-a sorts first, so it OWNS the shared key; sess-b drops its copy.
@@ -113,12 +129,12 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
 
   it("keeps a zero-surviving-message session in the corpus with empty messages", () => {
     const inputs: DedupeInput[] = [
-      {
+      di({
         project: "p",
         sessionId: "empty",
         sourcePath: "/e",
         lines: [userLine(T1, "<system-reminder>noise</system-reminder>")],
-      },
+      }),
     ];
     const corpus = buildCorpus(inputs);
     expect(corpus.sessions).toHaveLength(1);

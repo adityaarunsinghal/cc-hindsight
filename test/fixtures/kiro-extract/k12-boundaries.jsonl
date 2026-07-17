@@ -1,0 +1,5 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"first request"}],"meta":{"timestamp":1784000000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[{"kind":"text","data":"working on first"}]}}
+{"version":"v1","kind":"Clear","data":null}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m3","content":[{"kind":"text","data":"second request after clear"}],"meta":{"timestamp":1784000600}}}
+{"version":"v1","kind":"Compaction","data":{"summary":"summary text","strategy":"auto","messages_snapshot":[{"id":"s1","role":"user","content":[{"kind":"text","data":"first request"}],"meta":{"timestamp":1784000000}}]}}

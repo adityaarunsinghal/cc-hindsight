@@ -14,23 +14,24 @@
  * human deliberately re-sending the same text does so at a NEW timestamp — so
  * a different key — and therefore survives in both sessions.
  *
- * Pure module: no filesystem access. Input is the raw JSONL lines of each
- * session (already discovered by core/discover.ts); output is the deduped
- * corpus. Extraction (R1–R7, R10, R11) is delegated to core/extract.ts.
+ * Pure module: no filesystem access. Input is the ALREADY-EXTRACTED result of
+ * each session (a SessionSource turned raw lines into messages+drops upstream);
+ * output is the deduped corpus. Extraction itself is a backend concern
+ * (sources/*), so this module is fully source-agnostic.
  */
 
-import { type Drop, type ExtractedMessage, extractMessages } from "./extract.js";
+import type { Drop, ExtractedMessage, ExtractResult } from "../sources/types.js";
 
-/** One session's raw input to the corpus builder. */
+/** One session's input to the corpus builder — pre-extracted by its source. */
 export interface DedupeInput {
   /** Project short name (from discover). Copied through to the corpus. */
   project: string;
   /** Session id — the transcript basename without `.jsonl`. */
   sessionId: string;
-  /** Absolute (or resolved) path to the source `.jsonl`, for provenance. */
+  /** Absolute (or resolved) path to the source file, for provenance. */
   sourcePath: string;
-  /** Raw newline-delimited JSONL lines of the session file. */
-  lines: string[];
+  /** Pre-extracted result from `SessionSource.extract(lines)`. */
+  extracted: ExtractResult;
 }
 
 /**
@@ -113,11 +114,13 @@ function earliestTimestamp(messages: ExtractedMessage[]): string {
  * outcome passes still record that it was seen.
  */
 export function buildCorpus(input: DedupeInput[]): Corpus {
-  // Extract once per session, remembering each session's ordering timestamp.
-  const extracted = input.map((session) => {
-    const result = extractMessages(session.lines);
-    return { session, result, earliest: earliestTimestamp(result.messages) };
-  });
+  // Sessions arrive already extracted (by their SessionSource). Remember each
+  // session's ordering timestamp for the attribution sort below.
+  const extracted = input.map((session) => ({
+    session,
+    result: session.extracted,
+    earliest: earliestTimestamp(session.extracted.messages),
+  }));
 
   // Total order for attribution: earliest timestamp, then sessionId.
   extracted.sort((a, b) => {

@@ -1,0 +1,4 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"o1","content":[{"kind":"text","data":"refactor the auth module"}],"meta":{"timestamp":1784100000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"o2","content":[{"kind":"text","data":"Done."}]}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"o3","content":[{"kind":"text","data":"now add tests for it"}],"meta":{"timestamp":1784100300}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"n1","content":[{"kind":"text","data":"continue where we left off"}],"meta":{"timestamp":1784200000}}}

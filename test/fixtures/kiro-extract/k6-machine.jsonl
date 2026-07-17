@@ -1,0 +1,4 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"<agent-sop>internal framing</agent-sop>"}],"meta":{"timestamp":1784000000}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m2","content":[{"kind":"text","data":"[Recent channel messages for context:] blah"}],"meta":{"timestamp":1784000100}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m3","content":[{"kind":"text","data":"The generated tool was too large to display"}],"meta":{"timestamp":1784000200}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m4","content":[{"kind":"text","data":"real human instruction here"}],"meta":{"timestamp":1784000300,"additionalContext":"--- CONTEXT ENTRY BEGIN ---\nmachine ctx"}}}

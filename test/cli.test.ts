@@ -75,8 +75,11 @@ describe("root dispatch", () => {
 
   const ranScan = () => logs.join("\n").includes("No Claude Code projects found");
 
+  // `--source claude` keeps these dispatch tests hermetic: without it, `auto`
+  // would also read the machine's real ~/.kiro store (the "never read the real
+  // store" rule extends to kiro), and scan would find sessions there.
   it("runs the default scan on a bare invocation", async () => {
-    await runMain(main, { rawArgs: ["--claude-dir", emptyClaudeDir] });
+    await runMain(main, { rawArgs: ["--claude-dir", emptyClaudeDir, "--source", "claude"] });
     expect(ranScan()).toBe(true);
   });
 
@@ -84,14 +87,24 @@ describe("root dispatch", () => {
     // A naive raw-args heuristic ("first non-dash token = subcommand") would
     // mistake the VALUE `emptyClaudeDir` for a subcommand and skip the scan —
     // dispatch must rely on parsed positionals instead.
-    await runMain(main, { rawArgs: ["--home", emptyClaudeDir, "--claude-dir", emptyClaudeDir] });
+    await runMain(main, {
+      rawArgs: ["--home", emptyClaudeDir, "--claude-dir", emptyClaudeDir, "--source", "claude"],
+    });
     expect(ranScan()).toBe(true);
   });
 
   it("does NOT run the default scan when an explicit subcommand is given", async () => {
     // `status` against a home with nothing → prints funnel, never the scan line.
     await runMain(main, {
-      rawArgs: ["status", "--home", emptyClaudeDir, "--claude-dir", emptyClaudeDir],
+      rawArgs: [
+        "status",
+        "--home",
+        emptyClaudeDir,
+        "--claude-dir",
+        emptyClaudeDir,
+        "--source",
+        "claude",
+      ],
     });
     expect(ranScan()).toBe(false);
     expect(logs.join("\n")).toContain("discovered");

@@ -1,0 +1,2 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"c1","content":[{"kind":"text","data":"search the repo for all TODO comments"}],"meta":{"timestamp":1784002100}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"c2","content":[{"kind":"text","data":"Found 3."}]}}

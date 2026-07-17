@@ -9,17 +9,25 @@ import {
   TAIL_CHARS,
 } from "../core/anaphora.js";
 import { buildCorpus, type Corpus, type CorpusSession, type DedupeInput } from "../core/dedupe.js";
-import { discoverProjects } from "../core/discover.js";
 import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { buildOutcome, FINAL_TURNS, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
 import { exportFileName, renderExport } from "../core/render.js";
+import { parseSourceMode, resolveSources } from "../sources/registry.js";
+import type { SourceName, TimelineEvent } from "../sources/types.js";
 import { dim, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 
 /** One entry of `exports/manifest.json`. */
 export interface ManifestEntry {
   export: string;
+  /** Absolute path to the source transcript (provenance). */
   source: string;
+  /**
+   * Which backend produced this session. Absent in manifests written before the
+   * multi-backend seam ⇒ treat as "claude" (the old-manifest rule); writers
+   * always emit it.
+   */
+  origin?: SourceName;
   project: string;
   sessionId: string;
   messages: number;
@@ -31,6 +39,9 @@ export interface ManifestEntry {
 export interface ExportArgs {
   home?: string;
   "claude-dir"?: string;
+  "kiro-dir"?: string;
+  /** Which backend(s) to read: claude, kiro, or auto (default auto). */
+  source?: string;
   /** Case-insensitive substring filter on project short name. */
   project?: string;
   /** Minimum surviving human messages for a session to be exported (default 1). */
@@ -52,6 +63,10 @@ export interface ExportStats {
   skippedByFilter: number;
   /** Sessions with zero surviving human messages (skipped naturally). */
   zeroMessageSessions: number;
+  /** Sessions excluded by a source's session-level classifier (kiro automation). */
+  automationSkipped: number;
+  /** Exported session count broken down by backend (for the merged-store summary). */
+  sessionsByOrigin: Partial<Record<SourceName, number>>;
   /** Sessions with some messages but fewer than `--min-messages`. */
   belowMinMessages: number;
   /** Session files that could not be read (skipped, tolerated). */
@@ -93,55 +108,71 @@ export function runExport(opts: ExportArgs): ExportStats {
   const out = opts.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
 
-  const { home, claudeDir } = resolvePaths(opts);
+  const { home, claudeDir, kiroDir } = resolvePaths(opts);
   const minMessages = parseClampedInt(opts["min-messages"], { fallback: 1, min: 1 });
   const exportsDir = path.join(home, "exports");
+  const sourceMode = parseSourceMode(opts.source);
 
-  // Entry counts are unused by export (content is read below); skip the count
-  // read so each session file is read at most once for this command.
-  const projects = discoverProjects(claudeDir, { countEntries: false });
-
-  // Apply the --project filter; count the sessions it excludes for reporting.
-  let skippedByFilter = 0;
-  const selected = projects.filter((project) => {
-    if (opts.project && !projectMatches(project.shortName, opts.project)) {
-      skippedByFilter += project.sessions.length;
-      return false;
-    }
-    return true;
-  });
+  // Every active backend as a SessionSource. Extraction and timeline run through
+  // each source, so the seam is uniform; a single-active-source run (the common
+  // claude-only machine) is byte-identical to the pre-multi-backend behavior.
+  const sources = resolveSources(sourceMode, { claudeDir, kiroDir });
 
   // Read every selected session into the corpus input, tolerating read errors.
+  // Extraction runs through the OWNING source; the timeline is deferred to a
+  // lazy thunk keyed by the unique source path, so the anaphora/outcome passes
+  // below walk the SAME lines through the SAME source (the SessionSource law —
+  // extract↔timeline agreement — is what keeps index alignment sacred). `origin`
+  // is likewise tracked by source path.
   const inputs: DedupeInput[] = [];
+  const timelineOf = new Map<string, () => TimelineEvent[]>();
+  const originOf = new Map<string, SourceName>();
+  let skippedByFilter = 0;
+  let automationSkipped = 0;
   let readErrors = 0;
   const readErrorPaths: string[] = [];
-  for (const project of selected) {
-    for (const session of project.sessions) {
-      let content: string;
-      try {
-        content = fs.readFileSync(session.path, "utf8");
-      } catch {
-        readErrors++;
-        readErrorPaths.push(session.path);
+  for (const source of sources) {
+    // Entry counts are unused by export (content is read below); skip the count.
+    for (const project of source.discover({ countEntries: false })) {
+      // Apply the --project filter; count the sessions it excludes for reporting.
+      if (opts.project && !projectMatches(project.shortName, opts.project)) {
+        skippedByFilter += project.sessions.length;
         continue;
       }
-      inputs.push({
-        project: project.shortName,
-        sessionId: session.file.replace(/\.jsonl$/, ""),
-        sourcePath: session.path,
-        lines: content.split(/\r?\n/),
-      });
+      for (const session of project.sessions) {
+        // Session-level classification (kiro: exclude subagent/automation
+        // sessions). Claude classifies per-entry inside extract and has none.
+        if (source.classify?.({ ...session, project: project.shortName }) === "automation") {
+          automationSkipped++;
+          continue;
+        }
+        let content: string;
+        try {
+          content = fs.readFileSync(session.path, "utf8");
+        } catch {
+          readErrors++;
+          readErrorPaths.push(session.path);
+          continue;
+        }
+        const lines = content.split(/\r?\n/);
+        inputs.push({
+          project: project.shortName,
+          sessionId: session.file.replace(/\.jsonl$/, ""),
+          sourcePath: session.path,
+          extracted: source.extract(lines),
+        });
+        timelineOf.set(session.path, () => source.timeline(lines));
+        originOf.set(session.path, source.name);
+      }
     }
   }
 
   // ONE shared dedupe pass (rule R8) — anaphora/outcome reuse this exact
   // corpus so their record indices align with the rendered export exactly.
+  // The pass is a single union over all backends: cross-source (timestamp,text)
+  // collisions are exactly the fork-copy semantics dedupe already handles, and
+  // in practice never occur across different tools.
   const corpus = buildCorpus(inputs);
-
-  // Raw lines per session for the anaphora/outcome timeline walk (keyed by the
-  // unique source path). The corpus itself carries no raw lines.
-  const linesBySource = new Map<string, string[]>();
-  for (const inp of inputs) linesBySource.set(inp.sourcePath, inp.lines);
 
   // Partition sessions by the min-messages threshold.
   let zeroMessageSessions = 0;
@@ -168,28 +199,32 @@ export function runExport(opts: ExportArgs): ExportStats {
   const anaphoraByFile: Record<string, AnaphoraRecord[]> = {};
   const outcomesByFile: Record<string, OutcomeEvidence> = {};
   const attached: AttachedSession[] = [];
+  const sessionsByOrigin: Partial<Record<SourceName, number>> = {};
   let totalMessages = 0;
   let shortTurns = 0;
   let shortTurnsWithDecision = 0;
   let outcomeSessions = 0;
   for (const session of eligible) {
     const file = exportFileName(session.project, session.sessionId, used);
+    const origin = originOf.get(session.sourcePath) ?? "claude";
     writes.push({ file, content: renderExport(session) });
     manifest.push({
       export: file,
       source: session.sourcePath,
+      origin,
       project: session.project,
       sessionId: session.sessionId,
       messages: session.messages.length,
       first_ts: session.firstTs,
       last_ts: session.lastTs,
     });
+    sessionsByOrigin[origin] = (sessionsByOrigin[origin] ?? 0) + 1;
     totalMessages += session.messages.length;
 
-    const lines = linesBySource.get(session.sourcePath) ?? [];
-    const records = buildAnaphora(session, lines);
+    const timeline = timelineOf.get(session.sourcePath)?.() ?? [];
+    const records = buildAnaphora(session, timeline);
     anaphoraByFile[file] = records;
-    const outcome = buildOutcome(session, lines);
+    const outcome = buildOutcome(session, timeline);
     outcomesByFile[file] = outcome;
     if (outcome.final_assistant_tail !== "") outcomeSessions++;
     shortTurns += records.length;
@@ -231,11 +266,12 @@ export function runExport(opts: ExportArgs): ExportStats {
   );
 
   // Prune stale exports: `.md` files from a previous run whose session no
-  // longer exists (deleted/renamed under ~/.claude). ONLY on an unfiltered,
-  // default-threshold run — otherwise the current write set is a deliberate
-  // subset and the "missing" files are valid entries from other scopes.
+  // longer exists (deleted/renamed in the store). ONLY on an unfiltered,
+  // default-threshold, ALL-SOURCES run — otherwise the current write set is a
+  // deliberate subset and the "missing" files are valid entries from other
+  // scopes (a different --project, or the OTHER backend under --source claude).
   let prunedExports = 0;
-  if (!opts.project && minMessages === 1) {
+  if (!opts.project && minMessages === 1 && sourceMode === "auto") {
     const kept = new Set(writes.map((w) => w.file));
     for (const f of fs.readdirSync(exportsDir)) {
       if (f.endsWith(".md") && !kept.has(f)) {
@@ -252,6 +288,8 @@ export function runExport(opts: ExportArgs): ExportStats {
     duplicatesDropped: corpus.duplicatesDropped,
     skippedByFilter,
     zeroMessageSessions,
+    automationSkipped,
+    sessionsByOrigin,
     belowMinMessages,
     readErrors,
     badLines,
@@ -286,10 +324,29 @@ function reportExport(
   readErrorPaths: string[],
   attached: AttachedSession[],
 ): void {
+  // With a single active backend (the common claude-only machine) the parenthetical
+  // opens exactly as before — byte-identical; with two, it gains a per-origin
+  // breakdown so a merged run is legible ("9 claude + 3 kiro; …").
+  const origins = (Object.keys(stats.sessionsByOrigin) as SourceName[]).sort();
+  const open =
+    origins.length > 1
+      ? `(${origins.map((o) => `${stats.sessionsByOrigin[o]} ${o}`).join(" + ")}; `
+      : "(";
   write(
-    `exported ${stats.exportedSessions} sessions (${stats.totalMessages} messages, ` +
+    `exported ${stats.exportedSessions} sessions ${open}${stats.totalMessages} messages, ` +
       `${stats.duplicatesDropped} duplicates dropped) → ${stats.exportsDir}`,
   );
+
+  // Merged-corpus notice (§ accepted-risk register): `--source auto` silently
+  // widens a dual-tool user's default corpus — say so once, with the escape.
+  if (origins.length > 1) {
+    write(
+      dim(
+        `  including ${stats.sessionsByOrigin.kiro ?? 0} kiro session(s); ` +
+          "use --source claude to restore the claude-only scope",
+      ),
+    );
+  }
 
   // Anaphora + outcome accounting.
   write(
@@ -304,6 +361,9 @@ function reportExport(
   }
   if (stats.zeroMessageSessions > 0) {
     write(dim(`  ${stats.zeroMessageSessions} session(s) had no human messages (skipped)`));
+  }
+  if (stats.automationSkipped > 0) {
+    write(dim(`  ${stats.automationSkipped} automation session(s) excluded (kiro subagent/agent)`));
   }
   if (stats.belowMinMessages > 0) {
     write(

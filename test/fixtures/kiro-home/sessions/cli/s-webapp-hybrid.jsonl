@@ -1,0 +1,3 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"h1","content":[{"kind":"text","data":"[AGENT SYSTEM PROMPT] You are a spawned worker."}],"meta":{"timestamp":1784010000}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"h2","content":[{"kind":"text","data":"Working."}]}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"h3","content":[{"kind":"text","data":"actually focus on the login flow instead"}],"meta":{"timestamp":1784010060}}}
