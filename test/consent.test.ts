@@ -412,6 +412,77 @@ describe("runDistill", () => {
     expect(oneshot).toContain("Do the whole thing well.");
   });
 
+  it("--yes cascades into consolidate + clipboard copy after the library", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
+    const confirmSpy = async (): Promise<ConsentResult> => "proceed";
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions"))
+        return {
+          tasks: [{ slug: "the-task", title: "t", rationale: "r", members: ["a"] }],
+          misc: [],
+        };
+      if (opts.prompt.includes("realistic ideal first prompt"))
+        return {
+          slug: "the-task",
+          title: "T",
+          oneshot_markdown: "Do the whole thing well.",
+          confidence: "high",
+          preferences: [{ text: "be terse", evidence: "e" }],
+        };
+      if (opts.prompt.includes("Merge semantic duplicates"))
+        return { preferences: [{ text: "be terse", merged_from: 1 }] };
+      return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
+    }) as RunnerFn;
+    let copiedText = "";
+    const clipboard = async (text: string) => {
+      copiedText = text;
+      return { ok: true, tool: "pbcopy" };
+    };
+    const code = await runDistill(
+      { home, yes: true },
+      { confirm: confirmSpy, output: cap.out, input: forbiddenInput(), runner, clipboard },
+    );
+    expect(code).toBe(0);
+    // The cascade consolidated the observed preference and copied the block.
+    expect(cap.text()).toContain("consolidated 1 → 1 preference(s).");
+    expect(cap.text()).toContain("copied (1 preference(s), via pbcopy)");
+    expect(copiedText).toContain("- be terse");
+    expect(cap.text()).toContain("CLAUDE.md");
+  });
+
+  it("skips the cascade entirely in a pipe without --yes (no prompt surface)", async () => {
+    const cap = captureOutput();
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
+    const confirmSpy = async (): Promise<ConsentResult> => "proceed";
+    const runner = (async (opts: { prompt: string }) => {
+      if (opts.prompt.includes("grouping Claude Code sessions"))
+        return {
+          tasks: [{ slug: "the-task", title: "t", rationale: "r", members: ["a"] }],
+          misc: [],
+        };
+      if (opts.prompt.includes("realistic ideal first prompt"))
+        return {
+          slug: "the-task",
+          title: "T",
+          oneshot_markdown: "Do the whole thing well.",
+          confidence: "high",
+          preferences: [{ text: "be terse", evidence: "e" }],
+        };
+      if (opts.prompt.includes("Merge semantic duplicates"))
+        throw new Error("cascade must not consolidate without a prompt surface");
+      return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
+    }) as RunnerFn;
+    // No injected input and not a TTY: the library offer and the cascade both
+    // skip; output ends with the hint exactly as before the cascade existed.
+    const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
+    expect(code).toBe(0);
+    expect(cap.text()).not.toContain("Consolidate your preferences");
+    expect(cap.text()).toContain("cc-hindsight list");
+  });
+
   it("proceeds past a failed digest, authors the rest, and exits 1", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);

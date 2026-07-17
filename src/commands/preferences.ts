@@ -227,9 +227,10 @@ export async function runConsolidation(opts: {
 
 /**
  * Resolve the preferences target: explicit `--target`, else infer from the
- * active source (kiro source ⇒ kiro steering; else claude).
+ * active source (kiro source ⇒ kiro steering; else claude). Exported for the
+ * distill cascade, which infers the target the same way.
  */
-function resolveTarget(
+export function resolveTarget(
   raw: string | undefined,
   sourceMode: "claude" | "kiro" | "auto",
 ): PreferencesTarget {
@@ -280,7 +281,7 @@ function targetFooter(target: PreferencesTarget): string[] {
  * copy the paste guidance follows the confirmation. Returns whether the block
  * was copied, so the plain path can still print its footer when no copy landed.
  */
-async function offerCopyBlock(opts: {
+export async function offerCopyBlock(opts: {
   block: string;
   count: number;
   target: PreferencesTarget;

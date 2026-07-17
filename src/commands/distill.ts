@@ -13,6 +13,7 @@ import {
 import type { Digest } from "../claude/schemas.js";
 import { resolveInputBudget, resolveTimeoutMs, resolveTruncatePolicy } from "../core/budget.js";
 import { readLibrary } from "../core/library.js";
+import { aggregatePreferences } from "../core/preferences.js";
 import {
   clearCheckpoints,
   loadDigests,
@@ -29,6 +30,7 @@ import { renderLibraryTable } from "../ui/library-table.js";
 import { banner, bold, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
+import { offerCopyBlock, resolveTarget, runConsolidation } from "./preferences.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
 // it; re-exported here because the distill plan is computed from it.
@@ -164,6 +166,8 @@ export interface DistillDeps {
   runner?: RunnerFn;
   input?: Readable;
   output?: Writable;
+  /** Clipboard sink for the preferences cascade (injectable for tests). */
+  clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
 
 /**
@@ -559,6 +563,17 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           );
           write(hint("cc-hindsight show <slug>"));
           write(hint("cc-hindsight copy <slug>"));
+          await offerPreferencesCascade({
+            home,
+            runner,
+            runnerName,
+            yes: Boolean(args.yes),
+            canPrompt,
+            sourceMode,
+            model: args.model,
+            deps,
+            output: out,
+          });
           return finishRun(hadFailure ? 1 : 0);
         }
       }
@@ -573,6 +588,66 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
   return finishRun(hadFailure ? 1 : 0);
+}
+
+/**
+ * The press-enter cascade at the end of a successful distill: offer to
+ * consolidate the freshly-authored preferences (one runner call, cost named in
+ * the prompt) and copy the result to the clipboard. Enter accepts each step.
+ * Same offer policy as the library display: --yes accepts everything without
+ * reading stdin; a pipe/CI without --yes skips silently. The runner is the one
+ * distill already resolved, so no second binary lookup or consent surface; the
+ * distill exit code is never affected by this cascade (best-effort tail).
+ */
+async function offerPreferencesCascade(opts: {
+  home: string;
+  runner: RunnerFn;
+  runnerName: "claude" | "kiro" | undefined;
+  yes: boolean;
+  canPrompt: boolean;
+  sourceMode: "claude" | "kiro" | "auto";
+  model?: string;
+  deps: DistillDeps;
+  output: Writable;
+}): Promise<void> {
+  const { home, runner, runnerName, yes, canPrompt, sourceMode, model, deps, output } = opts;
+  const write = (s = "") => output.write(`${s}\n`);
+
+  const entries = readLibrary(home);
+  const prefs = aggregatePreferences(entries);
+  if (prefs.length === 0) return; // nothing observed; keep the ending unchanged
+
+  const cli = runnerName === "kiro" ? "kiro-cli" : "claude";
+  write();
+  const proceed =
+    yes ||
+    (canPrompt &&
+      (await askYesNo(`Consolidate your preferences now (1 ${cli} call)?`, {
+        input: deps.input,
+        output: deps.output,
+        defaultYes: true,
+      })));
+  if (!proceed) return;
+
+  const target = resolveTarget(undefined, sourceMode);
+  const { merged, block } = await runConsolidation({
+    prefs,
+    taskCount: entries.length,
+    target,
+    runner,
+    model,
+    output,
+  });
+  if (merged === null || block === null) return; // failure already rendered the fallback
+
+  await offerCopyBlock({
+    block,
+    count: merged.length,
+    target,
+    yes,
+    deps: { input: deps.input, output: deps.output, clipboard: deps.clipboard },
+    output,
+  });
 }
 
 export default defineCommand({
