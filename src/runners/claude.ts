@@ -60,22 +60,67 @@ export function resetCapabilityCache(): void {
 }
 
 /**
- * Probe the installed CLI's `--help` once and cache the result. `--help` is a
- * local, deterministic, no-API invocation, so this never costs anything.
+ * Fallback help flag, tried when the first `--help` looks like a WRAPPER's own
+ * help rather than the native binary's. Distribution wrappers (one observed
+ * in the wild resolves credentials and model routing before exec'ing the
+ * native binary) document only their own options and forward everything else
+ * through; this flag is their documented escape hatch to the real help.
  */
-export async function probeCapabilities(bin: string, io: RunnerIo): Promise<Capabilities> {
-  if (capabilitiesCache) return capabilitiesCache;
-  const help = await io.spawn(bin, ["--help"], { input: "", timeoutMs: 15_000 });
-  const text = `${help.stdout}\n${help.stderr}`;
+const NATIVE_HELP_FLAG = "--claude-help";
+
+/** Derive the capability flags from a `--help` text. */
+function parseCapabilities(text: string): Capabilities {
   const disableTools: Capabilities["disableTools"] = text.includes("--tools")
     ? "tools-empty"
     : /--disallowed-?[tT]ools/.test(text)
       ? "disallowed"
       : "none";
-  const caps: Capabilities = {
-    jsonSchema: text.includes("--json-schema"),
-    disableTools,
-  };
+  return { jsonSchema: text.includes("--json-schema"), disableTools };
+}
+
+/**
+ * Does this help text plausibly come from the native Claude Code binary?
+ *
+ * `--output-format` is the signal we key on: distill cannot work without that
+ * flag, so any native help that matters here documents it. Its absence means we
+ * are reading someone else's help text (a wrapper's), and the capability answers
+ * drawn from it are not about the binary we will actually invoke.
+ */
+function looksLikeNativeHelp(text: string): boolean {
+  return text.includes("--output-format");
+}
+
+/**
+ * Probe the installed CLI's `--help` once and cache the result. `--help` is a
+ * local, deterministic, no-API invocation, so this never costs anything.
+ *
+ * A wrapper distribution can HIDE natively-supported flags from `--help` while
+ * still forwarding them (observed in the wild: a wrapper whose `--help` lists 5
+ * wrapper options and advertises neither `--json-schema` nor `--tools`, though
+ * both work; the native 69-flag help is behind `--claude-help`). Probing only
+ * the wrapper help silently degrades EVERY distill stage to the prompt-embedded
+ * schema with tools disabled by instruction alone. So when the help does not
+ * look native, re-probe once via {@link NATIVE_HELP_FLAG} and prefer that
+ * answer if it finds more. Worst case this costs one extra local `--help`.
+ */
+export async function probeCapabilities(bin: string, io: RunnerIo): Promise<Capabilities> {
+  if (capabilitiesCache) return capabilitiesCache;
+  const help = await io.spawn(bin, ["--help"], { input: "", timeoutMs: 15_000 });
+  const text = `${help.stdout}\n${help.stderr}`;
+  let caps = parseCapabilities(text);
+
+  if (!looksLikeNativeHelp(text)) {
+    try {
+      const native = await io.spawn(bin, [NATIVE_HELP_FLAG], { input: "", timeoutMs: 15_000 });
+      const nativeText = `${native.stdout}\n${native.stderr}`;
+      // Only trust the fallback if it actually looks like the native help —
+      // an unsupported flag may print a usage error or the same wrapper text.
+      if (looksLikeNativeHelp(nativeText)) caps = parseCapabilities(nativeText);
+    } catch {
+      // Fallback probing is best-effort: keep the first answer.
+    }
+  }
+
   capabilitiesCache = caps;
   return caps;
 }

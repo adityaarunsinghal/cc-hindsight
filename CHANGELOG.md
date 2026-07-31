@@ -22,6 +22,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Undiagnosable envelope errors.** A missing `result` now reports a snippet of
   the actual stdout; a verbose stream that ends without its terminal event says
   so explicitly instead of blaming a missing field.
+- **Capability probe under-detected on wrapper distributions.** A distribution
+  wrapper (observed in the wild: a `claude` that resolves credentials and model
+  routing, then execs the native binary) documents only its own options in
+  `--help` and forwards unknown flags through. Its help advertised neither
+  `--json-schema` nor `--tools`, yet both work when passed, so the probe read
+  `{jsonSchema: false, disableTools: "none"}` and silently degraded every
+  distill stage to the prompt-embedded schema with tools disabled by
+  instruction alone. When `--help` does not look like the native help (no
+  `--output-format`), the probe now re-checks once via `--claude-help` and
+  prefers that answer if it finds more. Verified against the real wrapper:
+  the probe now reports `{jsonSchema: true, disableTools: "tools-empty"}`.
 
 ## [1.1.0] - 2026-07-17
 

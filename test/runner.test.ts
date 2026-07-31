@@ -458,6 +458,77 @@ describe("probeCapabilities", () => {
     expect(caps).toEqual({ jsonSchema: false, disableTools: "disallowed" });
   });
 
+  // Regression: a distribution wrapper (one observed in the wild, which sets up
+  // credentials and model routing then execs the native binary) documents only ITS
+  // OWN options in `--help` and forwards unknown flags through. Its help text
+  // advertises neither `--json-schema` nor `--tools`, yet BOTH work when passed.
+  // Probing such help under-detects and silently degrades every distill stage to
+  // the prompt-embedded schema with tools left on by instruction only. A native
+  // `--help` always documents `--output-format` (distill depends on that flag),
+  // so its absence marks the text as not-the-native-help and we re-probe.
+  const WRAPPER_HELP =
+    "CLI wrapper for Claude Code (wrapper distribution).\n" +
+    "Unknown flags and subcommands are forwarded to the native binary.\n" +
+    "Options:\n  --aws-profile <AWS_PROFILE>\n  --settings <SETTINGS>\n" +
+    "  --claude-help  Show help for the native Claude Code binary\n";
+  const NATIVE_HELP =
+    "Usage: claude [options] [command] [prompt]\n" +
+    "  -p, --print\n  --output-format <format>\n  --json-schema <schema>\n" +
+    "  --tools <tools...>\n  --model <model>\n";
+
+  it("re-probes past a wrapper --help that hides the native flags", async () => {
+    resetCapabilityCache();
+    const seen: string[][] = [];
+    const io: RunnerIo = {
+      which: () => "/x/claude",
+      spawn: async (_bin, args) => {
+        seen.push(args);
+        const stdout = args.includes("--help") ? WRAPPER_HELP : NATIVE_HELP;
+        return { code: 0, signal: null, stdout, stderr: "", timedOut: false };
+      },
+    };
+    const caps = await probeCapabilities("/x/claude", io);
+    // The native capabilities win: full structured output + hard tool disabling.
+    expect(caps).toEqual({ jsonSchema: true, disableTools: "tools-empty" });
+    expect(seen.some((a) => a.includes("--claude-help"))).toBe(true);
+    resetCapabilityCache();
+  });
+
+  it("does NOT re-probe a native --help (one spawn, unchanged behavior)", async () => {
+    resetCapabilityCache();
+    let spawns = 0;
+    const io: RunnerIo = {
+      which: () => "/x/claude",
+      spawn: async () => {
+        spawns++;
+        return { code: 0, signal: null, stdout: NATIVE_HELP, stderr: "", timedOut: false };
+      },
+    };
+    const caps = await probeCapabilities("/x/claude", io);
+    expect(caps).toEqual({ jsonSchema: true, disableTools: "tools-empty" });
+    expect(spawns).toBe(1);
+    resetCapabilityCache();
+  });
+
+  it("keeps the degraded capabilities when the fallback probe also lacks them", async () => {
+    // A genuinely old CLI: no --output-format in help either. The fallback runs
+    // and finds nothing better, so we must not invent capabilities.
+    resetCapabilityCache();
+    const io: RunnerIo = {
+      which: () => "/x/claude",
+      spawn: async () => ({
+        code: 0,
+        signal: null,
+        stdout: "Usage: claude\n  --model <m>\n",
+        stderr: "",
+        timedOut: false,
+      }),
+    };
+    const caps = await probeCapabilities("/x/claude", io);
+    expect(caps).toEqual({ jsonSchema: false, disableTools: "none" });
+    resetCapabilityCache();
+  });
+
   it("caches the probe so it runs once per process", async () => {
     resetCapabilityCache();
     let spawns = 0;
@@ -468,7 +539,9 @@ describe("probeCapabilities", () => {
         return {
           code: 0,
           signal: null,
-          stdout: "--json-schema\n--tools",
+          // Includes --output-format so this reads as the NATIVE help; without it
+          // the wrapper-fallback probe fires and the spawn count is 2 by design.
+          stdout: "--output-format <format>\n--json-schema\n--tools",
           stderr: "",
           timedOut: false,
         };
