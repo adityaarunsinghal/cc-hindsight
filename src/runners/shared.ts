@@ -158,11 +158,31 @@ export function snippet(s: string, max = 500): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-/** Strip a Markdown code fence if the model wrapped its JSON in one. */
+/**
+ * Strip a Markdown code fence if the model wrapped its JSON in one.
+ *
+ * This is the last line of defense on the schema-in-prompt path (no
+ * `--json-schema`, and the kiro runner always): the model's raw text is all we
+ * get, and a fence we fail to strip becomes a JSON parse error that burns the
+ * one corrective retry. Verified against the live CLI on that path: the model
+ * really does answer with a ```json fence even when told to respond ONLY with
+ * JSON, so the neighboring shapes are worth tolerating too.
+ *
+ * The anchored form only matched a fence that was the WHOLE string, so a single
+ * "Here you go:" preamble or "Hope that helps!" sign-off defeated it, as did an
+ * uppercase ```JSON tag (which got captured into the body). Now: find the first
+ * fenced block anywhere in the text, case-insensitively; fall back to the
+ * trimmed text so non-fenced input and unterminated fences pass through
+ * unchanged and the caller can report the real content in its snippet.
+ */
 export function stripFence(text: string): string {
   const trimmed = text.trim();
-  const fence = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
-  return fence?.[1] ? fence[1].trim() : trimmed;
+  // Non-anchored so surrounding prose is tolerated; `i` for ```JSON; the lazy
+  // body plus the first-match semantics of `match` take the FIRST block when a
+  // model emits several.
+  const fence = trimmed.match(/```[a-z]*[ \t]*\r?\n?([\s\S]*?)\r?\n?```/i);
+  const body = fence?.[1]?.trim();
+  return body ? body : trimmed;
 }
 
 // --- shared prompt/retry machinery -----------------------------------------

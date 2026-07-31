@@ -42,6 +42,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default-Yes offers was read as yes. `ask()` now taps the raw bytes and falls
   back to their first line, so a newline-less answer is honored while a genuine
   no-input EOF still takes the default.
+- **A fenced JSON reply wrapped in any prose defeated `stripFence`.** The pattern
+  was anchored to the whole string, so a single `Here you go:` preamble or a
+  `Hope that helps!` sign-off around an otherwise perfect ```json block left the
+  fence in place, the parse failed, and the stage burned its one corrective
+  retry. An uppercase ```JSON tag was captured into the body for the same reason.
+  This is the last line of defense whenever the CLI cannot validate server-side
+  (no `--json-schema`, and always for the kiro runner), and the live model does
+  fence its output on that path even when told to answer with JSON only. Fence
+  detection is now unanchored and case-insensitive, takes the first block when
+  several are emitted, and still passes non-fenced text and unterminated fences
+  through untouched so error snippets keep showing the real content.
 
 ## [1.1.0] - 2026-07-17
 
