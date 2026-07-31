@@ -68,14 +68,6 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   making `export --verbose` unreadable (and camouflaging the bug above as machine
   noise). Attachments now report their `prompt`/`text`, or `<attachment type>`
   when they carry no human-readable payload.
-
-### Added
-
-- **SessionSource law test for the Claude backend** (`extract` ↔ `timeline`
-  agreement across 11 fixtures). kiro has had one since the multi-backend seam
-  landed; the Claude side did not, which is how a rule could halve the corpus
-  without a single test failing. Also verified against the real store: 286
-  sessions, 970 messages, 0 violations.
 - **K14: kiro dropped every mid-run steering message.** When the human types
   while kiro is working, the harness does not record a new `Prompt`: it wraps the
   words in a `[LIVE STEERING - New message from user]` envelope and appends that
@@ -90,6 +82,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the 5630 `toolResult` blocks in those same content arrays are untouched.
   Recovery runs in both `extract` and `timeline`, so the SessionSource law holds
   (verified on the real store: 306 files, 485 messages, 0 violations).
+
+### Added
+
+- **SessionSource law test for the Claude backend** (`extract` ↔ `timeline`
+  agreement across 11 fixtures). kiro has had one since the multi-backend seam
+  landed; the Claude side did not, which is how a rule could halve the corpus
+  without a single test failing. Also verified against the real store: 286
+  sessions, 970 messages, 0 violations.
+- **Systemic-failure breaker on the digest stage.** Five consecutive
+  byte-identical failures now stop the stage instead of grinding through every
+  remaining session. Per-session containment is right for a session-specific
+  problem, but an unbroken streak of the same error is an environment problem (a
+  reshaped CLI envelope, a revoked credential), and each failure also burns the
+  runner's one corrective retry, so continuing buys the same error at two calls
+  apiece. Measured on a 12-session live run where every call failed: 5 sessions
+  attempted instead of 12, saving 14 doomed invocations, and the report names the
+  environment as the likely cause rather than listing 12 identical errors.
+  Anything already digested stays checkpointed, sessions that were never reached
+  are reported as `not attempted` so the count is never silently short, and
+  `--no-breaker` restores the attempt-everything behavior.
 
 ## [1.1.0] - 2026-07-17
 

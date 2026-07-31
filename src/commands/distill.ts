@@ -50,6 +50,12 @@ export interface DistillArgs {
   project?: string;
   /** citty maps `--no-group` to `group: false`; grouping is on by default. */
   group?: boolean;
+  /**
+   * citty maps `--no-breaker` to `breaker: false`. The systemic-failure breaker
+   * is on by default; disabling it attempts every session even when they are all
+   * failing identically.
+   */
+  breaker?: boolean;
   "min-substance"?: string;
   model?: string;
   fresh?: boolean;
@@ -414,13 +420,18 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     truncate,
     timeoutMs,
     concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
+    // citty maps `--no-breaker` to breaker: false; on by default.
+    breaker: args.breaker !== false,
   });
 
   const doneTotal = digestResult.completed + digestResult.skipped;
   const digestSummary =
     `digest stage: ${doneTotal}/${plan.digests} done` +
     (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
-    (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : "");
+    (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : "") +
+    // Say the count is short BECAUSE the stage stopped early, so "0/92 done"
+    // is never mistaken for "92 sessions were each tried and failed".
+    (digestResult.aborted ? `, ${digestResult.notAttempted.length} not attempted (stopped)` : "");
   write(digestResult.failed.length ? digestSummary : green(digestSummary));
 
   if (digestResult.failed.length > 0) {
@@ -662,6 +673,12 @@ export default defineCommand({
       type: "boolean",
       default: true,
       description: "Group sessions into tasks (use --no-group for 1 session = 1 task)",
+    },
+    breaker: {
+      type: "boolean",
+      default: true,
+      description:
+        "Stop the digest stage after 5 consecutive identical failures (use --no-breaker to attempt every session)",
     },
     "min-substance": {
       type: "string",
