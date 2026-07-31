@@ -152,15 +152,26 @@ function rejectReason(entry: Record<string, unknown>): string | null {
 }
 
 /**
- * R3 — attachments hold messages typed while the agent was busy. Assumed shape
- * (pinned by r3-queued-command.jsonl):
+ * R3 — attachments hold messages typed while the agent was busy. Real shape
+ * (pinned by r3-queued-command-prompt-field.jsonl, copied from a live
+ * transcript):
  *   { "type": "attachment",
  *     "attachment": { "type": "queued_command",
  *                     "origin": { "kind": "human" },
  *                     "commandMode": "prompt",
- *                     "text": "the queued prompt text" } }
+ *                     "prompt": "the queued prompt text",
+ *                     "timestamp": "..." } }
  * Admit ONLY queued_command + origin.kind==="human" + commandMode==="prompt";
- * anything else is recorded as a Drop for observability.
+ * anything else is recorded as a Drop for observability. In particular
+ * `commandMode: "task-notification"` is the agent reporting a finished
+ * background task, not typed input.
+ *
+ * The text lives in `prompt`. An earlier version read `text`, which no shipped
+ * CLI writes here: the original fixture was hand-authored with that spelling, so
+ * the suite pinned a shape that never existed and R3 dropped EVERY genuinely
+ * queued human message (measured on a real 286-session store: 253 messages,
+ * ~42.9k chars). `text` is still read as a fallback so the older fixture's
+ * contract holds and any variant CLI that uses it keeps working.
  */
 function collectAttachment(
   entry: Record<string, unknown>,
@@ -176,7 +187,10 @@ function collectAttachment(
     att.origin.kind === "human" &&
     att.commandMode === "prompt"
   ) {
-    cleanPiece(typeof att.text === "string" ? att.text : "", pieces, drops, ts);
+    // `prompt` is what the CLI writes; `text` is the legacy/variant spelling.
+    const queued =
+      typeof att.prompt === "string" ? att.prompt : typeof att.text === "string" ? att.text : "";
+    cleanPiece(queued, pieces, drops, ts);
     return;
   }
   drops.push({
@@ -249,7 +263,16 @@ function entrySnippet(entry: Record<string, unknown>): string {
     }
   }
   const att = entry.attachment;
-  if (isRecord(att) && typeof att.text === "string") return snippet(att.text);
+  if (isRecord(att)) {
+    // Same field pair as R3: `prompt` is what ships, `text` the legacy spelling.
+    // Without `prompt` here, every dropped attachment fell through to dumping the
+    // entire entry as JSON, which made `export --verbose` drop reports unreadable
+    // (and hid the R3 field-name bug: the snippets looked like machine noise).
+    if (typeof att.prompt === "string") return snippet(att.prompt);
+    if (typeof att.text === "string") return snippet(att.text);
+    // No human-readable payload: name the shape instead of dumping the entry.
+    if (typeof att.type === "string") return snippet(`<attachment ${att.type}>`);
+  }
   return snippet(JSON.stringify(entry));
 }
 

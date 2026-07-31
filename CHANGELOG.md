@@ -53,6 +53,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   detection is now unanchored and case-insensitive, takes the first block when
   several are emitted, and still passes non-fenced text and unterminated fences
   through untouched so error snippets keep showing the real content.
+- **R3 dropped every message typed while the agent was busy.** Claude Code writes
+  a queued prompt's text in the attachment's `prompt` field; the extractor read
+  `text`, found nothing, and recorded a drop. Because the fixture pinning R3 was
+  hand-authored with `text`, the suite validated a shape no CLI emits and the
+  loss was invisible. Measured on a real 286-session store: **673 → 920 messages
+  exported (+247, a 36.7% increase)**, recovering all 253 human queued messages
+  (~42.9k chars). Every follow-up typed mid-run ("its ok let it cook", "putting
+  you back in plan mode") was being thrown away, so digests and authored oneshots
+  were built from a corpus missing a third of its input. `text` is still read as a
+  fallback.
+- **Drop reports dumped raw JSON for attachments.** `entrySnippet` also only knew
+  `text`, so every dropped attachment fell through to serializing the whole entry,
+  making `export --verbose` unreadable (and camouflaging the bug above as machine
+  noise). Attachments now report their `prompt`/`text`, or `<attachment type>`
+  when they carry no human-readable payload.
+
+### Added
+
+- **SessionSource law test for the Claude backend** (`extract` ↔ `timeline`
+  agreement across 11 fixtures). kiro has had one since the multi-backend seam
+  landed; the Claude side did not, which is how a rule could halve the corpus
+  without a single test failing. Also verified against the real store: 286
+  sessions, 970 messages, 0 violations.
 
 ## [1.1.0] - 2026-07-17
 

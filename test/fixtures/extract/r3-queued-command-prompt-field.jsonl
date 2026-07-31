@@ -1,0 +1,3 @@
+{"type":"attachment","timestamp":"2026-01-07T00:00:00.000Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"commandMode":"prompt","prompt":"its ok let it cook","timestamp":"2026-01-07T00:00:00.000Z"}}
+{"type":"attachment","timestamp":"2026-01-07T00:00:01.000Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"commandMode":"task-notification","prompt":"a machine task notification, not typed input"}}
+{"type":"attachment","timestamp":"2026-01-07T00:00:02.000Z","attachment":{"type":"queued_command","origin":{"kind":"assistant"},"commandMode":"prompt","prompt":"machine-originated queue"}}
