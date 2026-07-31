@@ -76,6 +76,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   landed; the Claude side did not, which is how a rule could halve the corpus
   without a single test failing. Also verified against the real store: 286
   sessions, 970 messages, 0 violations.
+- **K14: kiro dropped every mid-run steering message.** When the human types
+  while kiro is working, the harness does not record a new `Prompt`: it wraps the
+  words in a `[LIVE STEERING - New message from user]` envelope and appends that
+  to the NEXT `ToolResults` entry. K1 admits only `Prompt` entries, and K6 dropped
+  the envelope on its bracket marker, so the text was invisible either way.
+  Measured on a real 306-session store: **312 to 411 messages exported (+99, a
+  31.7% increase)**, recovering all 112 steering messages (~13.6k chars). These
+  are the turns where the human corrects course mid-run ("i kinda need you to
+  hurry up please", "git history, code and log.md never lie"), so they carry more
+  signal per character than almost anything else in a session. Only the
+  `<user_message>` body is admitted: the harness instructions around it stay out,
+  and the 5630 `toolResult` blocks in those same content arrays are untouched.
+  Recovery runs in both `extract` and `timeline`, so the SessionSource law holds
+  (verified on the real store: 306 files, 485 messages, 0 violations).
 
 ## [1.1.0] - 2026-07-17
 
