@@ -33,6 +33,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--output-format`), the probe now re-checks once via `--claude-help` and
   prefers that answer if it finds more. Verified against the real wrapper:
   the probe now reports `{jsonSchema: true, disableTools: "tools-empty"}`.
+- **An answer typed without a trailing newline inverted consent.** readline
+  discards a final line that arrives with no newline, so an answer terminated by
+  EOF (`printf y |`, or Ctrl-D straight after the keystroke) resolved to `""` and
+  was read as the prompt's default. Seen in the wild as
+  `Proceed? [y/N] ydeclined; nothing was invoked.`: the `y` echoed and was then
+  thrown away. This cut both ways, since a newline-less `n` against one of the
+  default-Yes offers was read as yes. `ask()` now taps the raw bytes and falls
+  back to their first line, so a newline-less answer is honored while a genuine
+  no-input EOF still takes the default.
 
 ## [1.1.0] - 2026-07-17
 
