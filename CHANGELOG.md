@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A finished `distill` run could hang forever instead of exiting.** The spawn
+  helper resolved on the child's `close` event, which fires when the stdio pipes
+  close rather than when the child exits. A CLI that execs a wrapper or starts
+  background helpers (one observed wrapper launches MCP servers) can exit while a
+  grandchild still holds the inherited stdout, so the runner waited on that
+  grandchild and the per-call timeout was powerless: its SIGTERM went to a process
+  that had already gone. Observed on a real 87-session run, which sat idle for
+  10+ minutes after its final output with all work already saved. Spawning now
+  settles on whichever of `exit` or `close` arrives first, with a macrotask for
+  buffered output to flush (verified lossless to 4MB).
+- **The clipboard offer had no timeout.** `xclip` with no usable X display holds
+  the selection indefinitely rather than failing, and the copy offer is the last
+  thing a run does, so a finished run looked hung. Copying is now bounded
+  (5s, `CLIPBOARD_TIMEOUT_MS`) and reports the timeout; the block is on screen
+  regardless. Its spawn also settles on `exit` and tolerates EPIPE, matching the
+  runner.
 - **`distill` failed on every call when Claude Code verbose mode is on.** With
   `"verbose": true` in `settings.json` (or `--verbose`), `claude -p
   --output-format json` emits a JSON **array** of stream events terminated by

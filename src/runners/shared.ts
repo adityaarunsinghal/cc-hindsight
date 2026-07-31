@@ -124,13 +124,37 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
     child.stderr?.on("data", (d: Buffer) => {
       stderr += d.toString();
     });
+    let settled = false;
+    const settle = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      resolve({ code, signal, stdout, stderr, timedOut });
+    };
+
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       clearTimers();
       reject(err);
     });
-    child.on("close", (code, signal) => {
-      clearTimers();
-      resolve({ code, signal, stdout, stderr, timedOut });
+
+    // `close` fires when the stdio PIPES close, `exit` when the child itself
+    // ends. Those differ whenever the child leaves a grandchild holding the
+    // inherited stdout (a wrapper that execs the real binary, or a CLI that
+    // starts background helpers — one observed wrapper launches MCP servers). In
+    // that case `close` can be minutes late, and the timeout cannot save us
+    // because its SIGTERM goes to a child that has already exited. Observed as a
+    // distill run sitting idle for 10+ minutes after its final output.
+    //
+    // So resolve on whichever comes first. `close` is preferred when it arrives
+    // first because the pipes are then fully drained; on `exit` we give the
+    // already-buffered 'data' events one macrotask to flush before settling,
+    // which is enough for output the child actually finished writing.
+    child.on("close", (code, signal) => settle(code, signal));
+    child.on("exit", (code, signal) => {
+      if (settled) return;
+      setImmediate(() => settle(code, signal));
     });
 
     // If the CLI exits early (auth error, bad flags, crash) while a large prompt

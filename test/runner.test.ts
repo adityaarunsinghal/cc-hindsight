@@ -429,6 +429,49 @@ describe("runClaude — timeout", () => {
   });
 });
 
+describe("defaultIo.spawn — a child that outlives its stdout pipe", () => {
+  // Root cause of an observed end-of-run hang: `close` fires when the stdio
+  // pipes close, NOT when the direct child exits. A CLI that execs a wrapper or
+  // starts background helpers (an observed wrapper launches MCP servers) can exit
+  // while a grandchild still holds the inherited stdout pipe. The runner then
+  // waits on that grandchild, and the timeout is powerless because its SIGTERM
+  // goes to a process that is already gone. Observed live: a distill run sat
+  // idle for 10+ minutes after its last output with no child of its own.
+  it("resolves on child exit instead of waiting for a lingering grandchild", async () => {
+    const t0 = Date.now();
+    const res = await defaultIo.spawn("/bin/sh", ["-c", "sleep 30 & echo done; exit 0"], {
+      input: "",
+      timeoutMs: 20_000,
+    });
+    // Must return as soon as the child exits, not 30s later when `sleep` ends.
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(res.timedOut).toBe(false);
+    expect(res.code).toBe(0);
+    // The output the child DID write is still captured.
+    expect(res.stdout).toContain("done");
+  }, 40_000);
+
+  it("still captures full output from a normal child", async () => {
+    // Guard: the exit-based path must not truncate a well-behaved child that
+    // flushes and exits without lingering helpers.
+    const res = await defaultIo.spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('a'.repeat(200000)); process.stdout.end()"],
+      { input: "", timeoutMs: 20_000 },
+    );
+    expect(res.stdout.length).toBe(200000);
+    expect(res.timedOut).toBe(false);
+  }, 40_000);
+
+  it("still reports a non-zero exit code", async () => {
+    const res = await defaultIo.spawn(process.execPath, ["-e", "process.exit(3)"], {
+      input: "",
+      timeoutMs: 20_000,
+    });
+    expect(res.code).toBe(3);
+  }, 40_000);
+});
+
 describe("probeCapabilities", () => {
   it("detects --json-schema and --tools support", async () => {
     resetCapabilityCache();

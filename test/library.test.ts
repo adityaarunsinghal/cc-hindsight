@@ -84,6 +84,23 @@ describe("copyToClipboard", () => {
     expect(captured).toEqual({ cmd: "pbcopy", input: "the prompt" });
   });
 
+  it("gives up on a clipboard tool that never exits", async () => {
+    // A clipboard tool can hang instead of failing: `xclip` with no X display
+    // holds the selection forever, and the copy offer is the LAST thing a
+    // distill run does, so the whole run appears to hang after its work is
+    // already finished and saved. Bound it rather than waiting forever.
+    const t0 = Date.now();
+    const result = await copyToClipboard("x", {
+      platform: "linux",
+      env: {},
+      timeoutMs: 150,
+      spawn: (_cmd, _args, _input) => new Promise(() => {}), // never settles
+    });
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/timed out/i);
+  }, 20_000);
+
   it("reports failure with the tool name and error", async () => {
     const result = await copyToClipboard("x", {
       platform: "linux",
