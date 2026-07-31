@@ -27,7 +27,7 @@ import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
-import { banner, bold, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
+import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
 import { offerCopyBlock, resolveTarget, runConsolidation } from "./preferences.js";

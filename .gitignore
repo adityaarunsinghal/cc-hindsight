@@ -14,3 +14,10 @@ demo/
 
 # Launch copy drafts (local-only working dir; nothing here ships)
 launch/
+
+# Local verification scratch (golden-reference exports, install logs). Never
+# upstream: these hold real transcript content and would drown `biome check .`
+# (useIgnoreFile: true means biome honors this file).
+.golden-baseline/
+.golden-*/
+npm-install.log
