@@ -4,6 +4,25 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`distill` failed on every call when Claude Code verbose mode is on.** With
+  `"verbose": true` in `settings.json` (or `--verbose`), `claude -p
+  --output-format json` emits a JSON **array** of stream events terminated by
+  the `type: "result"` event instead of a single result object. The runner read
+  the array as an object, found no `result`, and failed every digest, cluster,
+  and author call with `claude envelope missing a 'result' field` after burning
+  its one corrective retry — so a whole distill run died at the clustering
+  stage with no usable output. Both payload shapes are now accepted (the result
+  event is located by its `type` field, whose key position is not stable).
+  There is no `--no-verbose` flag to force the object shape, so tolerating the
+  array is the only fix available to a caller.
+- **Undiagnosable envelope errors.** A missing `result` now reports a snippet of
+  the actual stdout; a verbose stream that ends without its terminal event says
+  so explicitly instead of blaming a missing field.
+
 ## [1.1.0] - 2026-07-17
 
 ### Added

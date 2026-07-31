@@ -54,6 +54,39 @@ function envelope(body: unknown, opts: { isError?: boolean } = {}): SpawnResult 
   };
 }
 
+/**
+ * Build the `verbose`-mode envelope: a JSON ARRAY of stream events terminated
+ * by the `type: "result"` event, which is what the CLI emits under
+ * `--output-format json` when verbose mode is on (`--verbose`, or
+ * `"verbose": true` in settings.json). Shape copied from a real
+ * CLI 2.1.220 run: leading `system`/`assistant` events carry no `result` field,
+ * and on the terminal event `type` is NOT the first key — so the parser has to
+ * look the event up structurally, not by position.
+ */
+function verboseEnvelope(body: unknown, opts: { isError?: boolean } = {}): SpawnResult {
+  const result = typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    code: 0,
+    signal: null,
+    timedOut: false,
+    stderr: "",
+    stdout: JSON.stringify([
+      { type: "system", subtype: "init", session_id: "sess-1", tools: ["Bash", "Read"] },
+      { type: "assistant", message: { role: "assistant", content: [] }, session_id: "sess-1" },
+      {
+        is_error: opts.isError ?? false,
+        num_turns: 1,
+        session_id: "sess-1",
+        total_cost_usd: 0,
+        subtype: "success",
+        result,
+        type: "result",
+        uuid: "u-1",
+      },
+    ]),
+  };
+}
+
 interface MockIo {
   io: RunnerIo;
   calls: Array<{ args: string[]; input: string }>;
@@ -112,6 +145,84 @@ describe("runClaude — success path", () => {
       io,
     );
     expect(out).toEqual(VALID_DIGEST);
+  });
+});
+
+describe("runClaude — verbose-mode array envelope", () => {
+  // Regression: with verbose mode on (`--verbose`, or `"verbose": true` in
+  // settings.json) `claude -p --output-format json` emits a JSON ARRAY of
+  // stream events rather than a single object. The array has no top-level
+  // `result`, so every stage failed with "claude envelope missing a 'result'
+  // field", burned its one corrective retry, and the whole distill run died at
+  // the clustering call. There is no `--no-verbose` flag to force the object
+  // shape, so the parser must accept both.
+  it("extracts the result from the terminal result event", async () => {
+    const { io, calls } = mockIo([verboseEnvelope(VALID_DIGEST)]);
+    const out = await runClaude(
+      { prompt: "digest this", schema: DigestSchema, capabilities: CAPS_MODERN },
+      io,
+    );
+    expect(out).toEqual(VALID_DIGEST);
+    // No wasted retry: the first attempt must succeed.
+    expect(calls).toHaveLength(1);
+  });
+
+  it("recovers fenced JSON inside an array envelope", async () => {
+    const fenced = `\`\`\`json\n${JSON.stringify(VALID_DIGEST)}\n\`\`\``;
+    const { io } = mockIo([verboseEnvelope(fenced)]);
+    const out = await runClaude(
+      { prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN },
+      io,
+    );
+    expect(out).toEqual(VALID_DIGEST);
+  });
+
+  it("treats an is_error result event as a fatal CLI error (no retry)", async () => {
+    const { io, calls } = mockIo([verboseEnvelope("API Error: 403", { isError: true })]);
+    try {
+      await runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io);
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ClaudeRunnerError);
+      expect((e as ClaudeRunnerError).kind).toBe("cli-error");
+      expect((e as ClaudeRunnerError).message).toContain("403");
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reports a diagnosable error when an array carries no result event", async () => {
+    // A truncated/interrupted stream: events but no terminal result. Retryable,
+    // and the message must name the real problem rather than the misleading
+    // "missing a 'result' field".
+    const noResult: SpawnResult = {
+      code: 0,
+      signal: null,
+      timedOut: false,
+      stderr: "",
+      stdout: JSON.stringify([{ type: "system", subtype: "init" }, { type: "assistant" }]),
+    };
+    const { io } = mockIo([noResult, noResult]);
+    try {
+      await runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io);
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ClaudeRunnerError);
+      expect((e as ClaudeRunnerError).message).toContain("no 'result' event");
+    }
+  });
+
+  it("reports a diagnosable error for an empty array", async () => {
+    const empty: SpawnResult = {
+      code: 0,
+      signal: null,
+      timedOut: false,
+      stderr: "",
+      stdout: "[]",
+    };
+    const { io } = mockIo([empty, empty]);
+    await expect(
+      runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io),
+    ).rejects.toBeInstanceOf(ClaudeRunnerError);
   });
 });
 

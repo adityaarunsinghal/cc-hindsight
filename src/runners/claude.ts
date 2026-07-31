@@ -19,10 +19,12 @@ import type { AgentRunner, Capabilities, RunnerErrorKind, RunOptions } from "./t
  * runners/shared.ts. A shim at src/claude/runner.ts re-exports both halves,
  * including a `ClaudeRunnerError` class alias so `instanceof` keeps working.)
  *
- * Verified against Claude Code CLI 2.1.207 (macOS):
+ * Verified against Claude Code CLI 2.1.207 (macOS) and 2.1.220 (Linux):
  *   - `claude -p --output-format json`  → single JSON envelope on stdout
  *     ({ type, subtype, is_error, result, session_id, total_cost_usd, usage, ... });
- *     `result` carries the model's text output.
+ *     `result` carries the model's text output. With verbose mode ON stdout is
+ *     instead a JSON ARRAY of stream events terminated by the `type: "result"`
+ *     event; both shapes are accepted (see `selectEnvelope`).
  *   - `--json-schema <json>`            → server-side structured-output validation.
  *   - `--tools ""`                      → disable all built-in tools.
  *   - `--model <name>`                  → model pass-through.
@@ -80,7 +82,11 @@ export async function probeCapabilities(bin: string, io: RunnerIo): Promise<Capa
 
 // --- envelope parsing ------------------------------------------------------
 
-/** Minimal shape of the `claude -p --output-format json` envelope. */
+/**
+ * Minimal shape of the `claude -p --output-format json` envelope. Verbose mode
+ * emits an ARRAY of these (stream events) instead of one object; see
+ * {@link selectEnvelope}.
+ */
 interface ClaudeEnvelope {
   type?: string;
   subtype?: string;
@@ -90,14 +96,41 @@ interface ClaudeEnvelope {
 }
 
 /**
+ * Reduce a verbose-mode payload to the single envelope carrying the result.
+ *
+ * With verbose mode ON (`--verbose`, or `"verbose": true` in settings.json)
+ * `claude -p --output-format json` emits a JSON ARRAY of stream events
+ * (`system`/init, `assistant`, …) terminated by the `type: "result"` event,
+ * instead of the single result object it emits when verbose is off. Only the
+ * terminal event has `result`/`is_error`, so reading the array as an object
+ * finds no `result` field and every call fails. The CLI has no `--no-verbose`
+ * to force the object shape, so both shapes must be accepted.
+ *
+ * The result event is located by its `type` field (its key ORDER is not stable:
+ * on a real 2.1.220 run `type` is the 19th key), with a positional
+ * last-element fallback for a future stream that renames the type tag.
+ */
+function selectEnvelope(parsed: unknown): ClaudeEnvelope | null {
+  if (!Array.isArray(parsed)) return parsed as ClaudeEnvelope;
+  const events = parsed as ClaudeEnvelope[];
+  const resultEvent = events.findLast((e) => e?.type === "result");
+  if (resultEvent) return resultEvent;
+  // No type-tagged result event: fall back to the last element if it at least
+  // looks like a terminal envelope, else signal "no result event" to the caller.
+  const last = events.at(-1);
+  if (last && (Object.hasOwn(last, "result") || Object.hasOwn(last, "is_error"))) return last;
+  return null;
+}
+
+/**
  * Parse the CLI envelope and pull out the structured result. Throws
  * {@link AgentRunnerError} for fatal CLI errors (no point retrying) and
  * {@link RetryableError} for parse/validation problems (retry may help).
  */
 function extractResult(result: SpawnResult): unknown {
-  let envelope: ClaudeEnvelope;
+  let parsed: unknown;
   try {
-    envelope = JSON.parse(result.stdout) as ClaudeEnvelope;
+    parsed = JSON.parse(result.stdout);
   } catch {
     // No parseable envelope. A non-zero exit means the CLI itself failed
     // (auth, bad flags) — fatal. Otherwise the output is just malformed — retry.
@@ -111,6 +144,15 @@ function extractResult(result: SpawnResult): unknown {
     throw new RetryableError(`could not parse claude JSON envelope: ${detail}`);
   }
 
+  const envelope = selectEnvelope(parsed);
+  if (!envelope) {
+    // A verbose stream that ended without its terminal event (interrupted or
+    // truncated). Name the real problem so it is diagnosable from the report.
+    throw new RetryableError(
+      `claude verbose stream carried no 'result' event: ${snippet(result.stdout) || "empty array"}`,
+    );
+  }
+
   if (envelope.is_error) {
     const msg = typeof envelope.result === "string" ? envelope.result : "unknown error";
     throw new AgentRunnerError("cli-error", `claude reported an error: ${msg}`, {
@@ -121,7 +163,11 @@ function extractResult(result: SpawnResult): unknown {
 
   const r = envelope.result;
   if (r === null || r === undefined) {
-    throw new RetryableError("claude envelope missing a 'result' field");
+    // Include a snippet: a bare "missing a 'result' field" is undiagnosable, and
+    // that opacity is what hid the verbose-array shape for a whole release.
+    throw new RetryableError(
+      `claude envelope missing a 'result' field: ${snippet(result.stdout, 200) || "no output"}`,
+    );
   }
   // With --json-schema the CLI may hand back an already-structured object.
   if (typeof r === "object") return r;
