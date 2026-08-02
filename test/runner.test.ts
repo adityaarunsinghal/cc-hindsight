@@ -510,7 +510,7 @@ describe("probeCapabilities", () => {
   // `--help` always documents `--output-format` (distill depends on that flag),
   // so its absence marks the text as not-the-native-help and we re-probe.
   const WRAPPER_HELP =
-    "CLI wrapper for Claude Code (wrapper distribution).\n" +
+    "CLI wrapper for Claude Code.\n" +
     "Unknown flags and subcommands are forwarded to the native binary.\n" +
     "Options:\n  --aws-profile <AWS_PROFILE>\n  --settings <SETTINGS>\n" +
     "  --claude-help  Show help for the native Claude Code binary\n";

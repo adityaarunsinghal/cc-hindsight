@@ -61,10 +61,10 @@ export function resetCapabilityCache(): void {
 
 /**
  * Fallback help flag, tried when the first `--help` looks like a WRAPPER's own
- * help rather than the native binary's. Distribution wrappers (one observed
- * in the wild resolves credentials and model routing before exec'ing the
- * native binary) document only their own options and forward everything else
- * through; this flag is their documented escape hatch to the real help.
+ * help rather than the native binary's. A distribution wrapper (one observed in
+ * the wild resolves credentials and model routing, then execs the native binary)
+ * documents only its own options and forwards everything else through; this flag
+ * is its documented escape hatch to the real help.
  */
 const NATIVE_HELP_FLAG = "--claude-help";
 
