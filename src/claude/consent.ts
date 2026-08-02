@@ -111,12 +111,27 @@ function ask(question: string, input: Readable, output: Writable): Promise<strin
   // forever. Treat a spent stream as EOF (empty input) up front; callers map
   // that to the default answer. A live TTY reports readableEnded === false.
   if (input.readableEnded) return Promise.resolve("");
+
+  // Tap the raw bytes BEFORE readline is constructed so this listener is first
+  // in line and observes every chunk whatever readline does with it. This is the
+  // only way to recover an answer that arrives WITHOUT a trailing newline:
+  // readline discards such a final line rather than emitting it, so `printf y |`
+  // (or Ctrl-D straight after the keystroke) would otherwise resolve to "" and
+  // silently invert the user's answer to the default. Observed in the wild as
+  // `Proceed? [y/N] ydeclined; nothing was invoked.` — the `y` echoed, then lost.
+  let raw = "";
+  const tap = (chunk: Buffer | string) => {
+    raw += chunk.toString();
+  };
+  input.on("data", tap);
+
   const rl = readline.createInterface({ input, output });
   return new Promise((resolve) => {
     let answered = false;
     const done = (answer: string) => {
       if (answered) return;
       answered = true;
+      input.off("data", tap);
       rl.close();
       resolve(answer);
     };
@@ -124,9 +139,12 @@ function ask(question: string, input: Readable, output: Writable): Promise<strin
     // EOF (piped `< /dev/null`, CI, Ctrl-D) closes the stream WITHOUT firing the
     // question callback. Without this, the promise would never resolve — the
     // process hangs or falls off the event loop and exits 0 having done nothing,
-    // violating the "declining is exit 2, never a partial run" contract. Treat
-    // EOF as empty input, which the callers map to declined (default No).
-    rl.on("close", () => done(""));
+    // violating the "declining is exit 2, never a partial run" contract. Fall
+    // back to the FIRST line of the tapped bytes: that recovers a newline-less
+    // answer, and is still "" for a genuine no-input EOF, which the callers map
+    // to the default. Taking only the first line keeps later bytes (a second
+    // queued answer) out of this one.
+    rl.on("close", () => done(raw.split(/\r?\n/)[0] ?? ""));
   });
 }
 

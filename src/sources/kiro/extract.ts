@@ -31,7 +31,66 @@ const BRACKET_MARKERS: readonly string[] = [
   "[AGENT SYSTEM PROMPT]",
   "[Recent channel messages for context:]",
   "[Subagent completion event]",
+  "[LIVE STEERING - New message from user]",
 ];
+
+/**
+ * K14 — live-steering recovery. A message the human types WHILE the agent is
+ * working arrives wrapped in a harness envelope, not as its own Prompt:
+ *
+ *   [LIVE STEERING - New message from user]
+ *   The user sent a new message while you are working. …
+ *   <user_message id="steer-…">
+ *   the words the human actually typed
+ *   </user_message>
+ *   IMPORTANT: After completing your work, … [STEERING steer-…: …]
+ *
+ * The envelope leads with a bracket marker, so K6 would drop the whole thing and
+ * the human's words with it. Recover the `<user_message>` body FIRST (the same
+ * ordering trick R10 uses for slash-commands on the Claude side), and keep the
+ * surrounding harness instructions out: they are machine text and would
+ * otherwise dominate the digest prompt.
+ *
+ * These are the highest-value turns in a corpus, since steering is where the
+ * human corrects course mid-run. Measured on a real 306-session store: 112
+ * messages, ~13.6k chars.
+ */
+const LIVE_STEERING_MARKER = "[LIVE STEERING - New message from user]";
+const USER_MESSAGE_RE = /<user_message\b[^>]*>([\s\S]*?)<\/user_message>/;
+
+/** Pull the human words out of a live-steering envelope; null if there are none. */
+function recoverSteeringText(text: string): string | null {
+  if (!text.startsWith(LIVE_STEERING_MARKER)) return null;
+  const body = USER_MESSAGE_RE.exec(text)?.[1]?.trim();
+  return body ? body : null;
+}
+
+/**
+ * K14 — steering messages recovered from a `ToolResults` entry.
+ *
+ * In real sessions the harness delivers a mid-run steering message by appending
+ * it to the NEXT `ToolResults` entry's `content`, not as its own `Prompt`. Since
+ * K1 only admits `Prompt`, all of them were invisible: on a real 306-session
+ * store, 100 of the 112 steering messages arrive this way (12 more only in a
+ * `Compaction` snapshot, which K12 already reports as a drop).
+ *
+ * Only `kind: "text"` blocks whose text opens with the steering marker are
+ * admitted. That is deliberately narrow: the same content arrays hold 5630
+ * `toolResult` blocks of pure machine output, and nothing else in a
+ * `ToolResults` entry is human. Shared by extract and timeline so the
+ * SessionSource law holds.
+ */
+function steeringFromToolResults(data: unknown): string[] {
+  const content = isRecord(data) ? data.content : undefined;
+  if (!Array.isArray(content)) return [];
+  const out: string[] = [];
+  for (const block of content) {
+    if (!isRecord(block) || block.kind !== "text" || typeof block.data !== "string") continue;
+    const recovered = recoverSteeringText(block.data.trim());
+    if (recovered !== null) out.push(recovered);
+  }
+  return out;
+}
 
 /**
  * K6 / K2 — harness nudge strings. As a leading substring they mark a
@@ -117,6 +176,13 @@ function promptText(data: unknown, drops: Drop[], ts: string): string | null {
     const text = raw.trim();
     if (text === "") {
       drops.push({ reason: "K6: empty piece", snippet: snippet(raw), timestamp: ts || undefined });
+      continue;
+    }
+    // K14 — recover a live-steering message BEFORE the bracket-marker drop below
+    // would discard the envelope (and the human's words inside it).
+    const steered = recoverSteeringText(text);
+    if (steered !== null) {
+      pieces.push(steered);
       continue;
     }
     if (text.startsWith("<")) {
@@ -218,6 +284,17 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
       continue;
     }
 
+    // K14 — a mid-run steering message rides along on the next ToolResults
+    // entry rather than arriving as its own Prompt. Admitted BEFORE the K1
+    // Prompt-only gate below, which would otherwise skip the entry entirely.
+    if (parsed.kind === "ToolResults") {
+      const ts = normalizeTimestamp(isRecord(data) ? data.meta : undefined);
+      for (const steered of steeringFromToolResults(data)) {
+        messages.push({ timestamp: ts, text: steered });
+        liveKeys.add(`${ts}\u0000${steered}`);
+      }
+      continue;
+    }
     // K1 — only Prompt entries are candidate human input.
     if (parsed.kind !== "Prompt") continue;
 
@@ -274,11 +351,20 @@ export function kiroTimeline(lines: string[]): TimelineEvent[] {
     } else if (kind === "AssistantMessage") {
       const text = assistantText(data);
       if (text !== "") events.push({ kind: "assistant", timestamp: "", text });
+    } else if (kind === "ToolResults") {
+      // K14 — a steering message delivered on a ToolResults entry is a HUMAN
+      // turn and must appear here too, or the SessionSource law breaks and
+      // anaphora attributes context to the wrong turn. Everything else in a
+      // ToolResults entry stays machine output and is not an event.
+      const ts = normalizeTimestamp(isRecord(data) ? data.meta : undefined);
+      for (const steered of steeringFromToolResults(data)) {
+        events.push({ kind: "human", timestamp: ts, text: steered });
+      }
     } else if (kind === "Clear" || kind === "Compaction") {
       // Hard context reset — closes antecedent/decision windows (K12).
       events.push({ kind: "boundary", timestamp: "", text: kind });
     }
-    // ToolResults and unknown kinds are not timeline events.
+    // Unknown kinds are not timeline events.
   }
 
   return events;

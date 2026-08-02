@@ -19,10 +19,12 @@ import type { AgentRunner, Capabilities, RunnerErrorKind, RunOptions } from "./t
  * runners/shared.ts. A shim at src/claude/runner.ts re-exports both halves,
  * including a `ClaudeRunnerError` class alias so `instanceof` keeps working.)
  *
- * Verified against Claude Code CLI 2.1.207 (macOS):
+ * Verified against Claude Code CLI 2.1.207 (macOS) and 2.1.220 (Linux):
  *   - `claude -p --output-format json`  → single JSON envelope on stdout
  *     ({ type, subtype, is_error, result, session_id, total_cost_usd, usage, ... });
- *     `result` carries the model's text output.
+ *     `result` carries the model's text output. With verbose mode ON stdout is
+ *     instead a JSON ARRAY of stream events terminated by the `type: "result"`
+ *     event; both shapes are accepted (see `selectEnvelope`).
  *   - `--json-schema <json>`            → server-side structured-output validation.
  *   - `--tools ""`                      → disable all built-in tools.
  *   - `--model <name>`                  → model pass-through.
@@ -58,29 +60,78 @@ export function resetCapabilityCache(): void {
 }
 
 /**
- * Probe the installed CLI's `--help` once and cache the result. `--help` is a
- * local, deterministic, no-API invocation, so this never costs anything.
+ * Fallback help flag, tried when the first `--help` looks like a WRAPPER's own
+ * help rather than the native binary's. A distribution wrapper (one observed in
+ * the wild resolves credentials and model routing, then execs the native binary)
+ * documents only its own options and forwards everything else through; this flag
+ * is its documented escape hatch to the real help.
  */
-export async function probeCapabilities(bin: string, io: RunnerIo): Promise<Capabilities> {
-  if (capabilitiesCache) return capabilitiesCache;
-  const help = await io.spawn(bin, ["--help"], { input: "", timeoutMs: 15_000 });
-  const text = `${help.stdout}\n${help.stderr}`;
+const NATIVE_HELP_FLAG = "--claude-help";
+
+/** Derive the capability flags from a `--help` text. */
+function parseCapabilities(text: string): Capabilities {
   const disableTools: Capabilities["disableTools"] = text.includes("--tools")
     ? "tools-empty"
     : /--disallowed-?[tT]ools/.test(text)
       ? "disallowed"
       : "none";
-  const caps: Capabilities = {
-    jsonSchema: text.includes("--json-schema"),
-    disableTools,
-  };
+  return { jsonSchema: text.includes("--json-schema"), disableTools };
+}
+
+/**
+ * Does this help text plausibly come from the native Claude Code binary?
+ *
+ * `--output-format` is the signal we key on: distill cannot work without that
+ * flag, so any native help that matters here documents it. Its absence means we
+ * are reading someone else's help text (a wrapper's), and the capability answers
+ * drawn from it are not about the binary we will actually invoke.
+ */
+function looksLikeNativeHelp(text: string): boolean {
+  return text.includes("--output-format");
+}
+
+/**
+ * Probe the installed CLI's `--help` once and cache the result. `--help` is a
+ * local, deterministic, no-API invocation, so this never costs anything.
+ *
+ * A wrapper distribution can HIDE natively-supported flags from `--help` while
+ * still forwarding them (observed in the wild: a wrapper whose `--help` lists 5
+ * wrapper options and advertises neither `--json-schema` nor `--tools`, though
+ * both work; the native 69-flag help is behind `--claude-help`). Probing only
+ * the wrapper help silently degrades EVERY distill stage to the prompt-embedded
+ * schema with tools disabled by instruction alone. So when the help does not
+ * look native, re-probe once via {@link NATIVE_HELP_FLAG} and prefer that
+ * answer if it finds more. Worst case this costs one extra local `--help`.
+ */
+export async function probeCapabilities(bin: string, io: RunnerIo): Promise<Capabilities> {
+  if (capabilitiesCache) return capabilitiesCache;
+  const help = await io.spawn(bin, ["--help"], { input: "", timeoutMs: 15_000 });
+  const text = `${help.stdout}\n${help.stderr}`;
+  let caps = parseCapabilities(text);
+
+  if (!looksLikeNativeHelp(text)) {
+    try {
+      const native = await io.spawn(bin, [NATIVE_HELP_FLAG], { input: "", timeoutMs: 15_000 });
+      const nativeText = `${native.stdout}\n${native.stderr}`;
+      // Only trust the fallback if it actually looks like the native help —
+      // an unsupported flag may print a usage error or the same wrapper text.
+      if (looksLikeNativeHelp(nativeText)) caps = parseCapabilities(nativeText);
+    } catch {
+      // Fallback probing is best-effort: keep the first answer.
+    }
+  }
+
   capabilitiesCache = caps;
   return caps;
 }
 
 // --- envelope parsing ------------------------------------------------------
 
-/** Minimal shape of the `claude -p --output-format json` envelope. */
+/**
+ * Minimal shape of the `claude -p --output-format json` envelope. Verbose mode
+ * emits an ARRAY of these (stream events) instead of one object; see
+ * {@link selectEnvelope}.
+ */
 interface ClaudeEnvelope {
   type?: string;
   subtype?: string;
@@ -90,14 +141,41 @@ interface ClaudeEnvelope {
 }
 
 /**
+ * Reduce a verbose-mode payload to the single envelope carrying the result.
+ *
+ * With verbose mode ON (`--verbose`, or `"verbose": true` in settings.json)
+ * `claude -p --output-format json` emits a JSON ARRAY of stream events
+ * (`system`/init, `assistant`, …) terminated by the `type: "result"` event,
+ * instead of the single result object it emits when verbose is off. Only the
+ * terminal event has `result`/`is_error`, so reading the array as an object
+ * finds no `result` field and every call fails. The CLI has no `--no-verbose`
+ * to force the object shape, so both shapes must be accepted.
+ *
+ * The result event is located by its `type` field (its key ORDER is not stable:
+ * on a real 2.1.220 run `type` is the 19th key), with a positional
+ * last-element fallback for a future stream that renames the type tag.
+ */
+function selectEnvelope(parsed: unknown): ClaudeEnvelope | null {
+  if (!Array.isArray(parsed)) return parsed as ClaudeEnvelope;
+  const events = parsed as ClaudeEnvelope[];
+  const resultEvent = events.findLast((e) => e?.type === "result");
+  if (resultEvent) return resultEvent;
+  // No type-tagged result event: fall back to the last element if it at least
+  // looks like a terminal envelope, else signal "no result event" to the caller.
+  const last = events.at(-1);
+  if (last && (Object.hasOwn(last, "result") || Object.hasOwn(last, "is_error"))) return last;
+  return null;
+}
+
+/**
  * Parse the CLI envelope and pull out the structured result. Throws
  * {@link AgentRunnerError} for fatal CLI errors (no point retrying) and
  * {@link RetryableError} for parse/validation problems (retry may help).
  */
 function extractResult(result: SpawnResult): unknown {
-  let envelope: ClaudeEnvelope;
+  let parsed: unknown;
   try {
-    envelope = JSON.parse(result.stdout) as ClaudeEnvelope;
+    parsed = JSON.parse(result.stdout);
   } catch {
     // No parseable envelope. A non-zero exit means the CLI itself failed
     // (auth, bad flags) — fatal. Otherwise the output is just malformed — retry.
@@ -111,6 +189,15 @@ function extractResult(result: SpawnResult): unknown {
     throw new RetryableError(`could not parse claude JSON envelope: ${detail}`);
   }
 
+  const envelope = selectEnvelope(parsed);
+  if (!envelope) {
+    // A verbose stream that ended without its terminal event (interrupted or
+    // truncated). Name the real problem so it is diagnosable from the report.
+    throw new RetryableError(
+      `claude verbose stream carried no 'result' event: ${snippet(result.stdout) || "empty array"}`,
+    );
+  }
+
   if (envelope.is_error) {
     const msg = typeof envelope.result === "string" ? envelope.result : "unknown error";
     throw new AgentRunnerError("cli-error", `claude reported an error: ${msg}`, {
@@ -121,7 +208,11 @@ function extractResult(result: SpawnResult): unknown {
 
   const r = envelope.result;
   if (r === null || r === undefined) {
-    throw new RetryableError("claude envelope missing a 'result' field");
+    // Include a snippet: a bare "missing a 'result' field" is undiagnosable, and
+    // that opacity is what hid the verbose-array shape for a whole release.
+    throw new RetryableError(
+      `claude envelope missing a 'result' field: ${snippet(result.stdout, 200) || "no output"}`,
+    );
   }
   // With --json-schema the CLI may hand back an already-structured object.
   if (typeof r === "object") return r;

@@ -4,6 +4,121 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-08-02
+
+### Fixed
+
+- **A finished `distill` run could hang forever instead of exiting.** The spawn
+  helper resolved on the child's `close` event, which fires when the stdio pipes
+  close rather than when the child exits. A CLI that execs a wrapper or starts
+  background helpers (one observed wrapper launches MCP servers) can exit while a
+  grandchild still holds the inherited stdout, so the runner waited on that
+  grandchild and the per-call timeout was powerless: its SIGTERM went to a process
+  that had already gone. Observed on a real 87-session run, which sat idle for
+  10+ minutes after its final output with all work already saved. Spawning now
+  settles on whichever of `exit` or `close` arrives first, with a macrotask for
+  buffered output to flush (verified lossless to 4MB).
+- **The clipboard offer had no timeout.** `xclip` with no usable X display holds
+  the selection indefinitely rather than failing, and the copy offer is the last
+  thing a run does, so a finished run looked hung. Copying is now bounded
+  (5s, `CLIPBOARD_TIMEOUT_MS`) and reports the timeout; the block is on screen
+  regardless. Its spawn also settles on `exit` and tolerates EPIPE, matching the
+  runner.
+- **`distill` failed on every call when Claude Code verbose mode is on.** With
+  `"verbose": true` in `settings.json` (or `--verbose`), `claude -p
+  --output-format json` emits a JSON **array** of stream events terminated by
+  the `type: "result"` event instead of a single result object. The runner read
+  the array as an object, found no `result`, and failed every digest, cluster,
+  and author call with `claude envelope missing a 'result' field` after burning
+  its one corrective retry — so a whole distill run died at the clustering
+  stage with no usable output. Both payload shapes are now accepted (the result
+  event is located by its `type` field, whose key position is not stable).
+  There is no `--no-verbose` flag to force the object shape, so tolerating the
+  array is the only fix available to a caller.
+- **Undiagnosable envelope errors.** A missing `result` now reports a snippet of
+  the actual stdout; a verbose stream that ends without its terminal event says
+  so explicitly instead of blaming a missing field.
+- **Capability probe under-detected on wrapper distributions.** A distribution
+  wrapper (observed in the wild: a `claude` that resolves credentials and model
+  routing, then execs the native binary) documents only its own options in
+  `--help` and forwards unknown flags through. Its help advertised neither
+  `--json-schema` nor `--tools`, yet both work when passed, so the probe read
+  `{jsonSchema: false, disableTools: "none"}` and silently degraded every
+  distill stage to the prompt-embedded schema with tools disabled by
+  instruction alone. When `--help` does not look like the native help (no
+  `--output-format`), the probe now re-checks once via `--claude-help` and
+  prefers that answer if it finds more. Verified against the real wrapper:
+  the probe now reports `{jsonSchema: true, disableTools: "tools-empty"}`.
+- **An answer typed without a trailing newline inverted consent.** readline
+  discards a final line that arrives with no newline, so an answer terminated by
+  EOF (`printf y |`, or Ctrl-D straight after the keystroke) resolved to `""` and
+  was read as the prompt's default. Seen in the wild as
+  `Proceed? [y/N] ydeclined; nothing was invoked.`: the `y` echoed and was then
+  thrown away. This cut both ways, since a newline-less `n` against one of the
+  default-Yes offers was read as yes. `ask()` now taps the raw bytes and falls
+  back to their first line, so a newline-less answer is honored while a genuine
+  no-input EOF still takes the default.
+- **A fenced JSON reply wrapped in any prose defeated `stripFence`.** The pattern
+  was anchored to the whole string, so a single `Here you go:` preamble or a
+  `Hope that helps!` sign-off around an otherwise perfect ```json block left the
+  fence in place, the parse failed, and the stage burned its one corrective
+  retry. An uppercase ```JSON tag was captured into the body for the same reason.
+  This is the last line of defense whenever the CLI cannot validate server-side
+  (no `--json-schema`, and always for the kiro runner), and the live model does
+  fence its output on that path even when told to answer with JSON only. Fence
+  detection is now unanchored and case-insensitive, takes the first block when
+  several are emitted, and still passes non-fenced text and unterminated fences
+  through untouched so error snippets keep showing the real content.
+- **R3 dropped every message typed while the agent was busy.** Claude Code writes
+  a queued prompt's text in the attachment's `prompt` field; the extractor read
+  `text`, found nothing, and recorded a drop. Because the fixture pinning R3 was
+  hand-authored with `text`, the suite validated a shape no CLI emits and the
+  loss was invisible. Measured on a real 286-session store: **673 → 920 messages
+  exported (+247, a 36.7% increase)**, recovering all 253 human queued messages
+  (~42.9k chars). Every follow-up typed mid-run ("its ok let it cook", "putting
+  you back in plan mode") was being thrown away, so digests and authored oneshots
+  were built from a corpus missing a third of its input. `text` is still read as a
+  fallback.
+- **Drop reports dumped raw JSON for attachments.** `entrySnippet` also only knew
+  `text`, so every dropped attachment fell through to serializing the whole entry,
+  making `export --verbose` unreadable (and camouflaging the bug above as machine
+  noise). Attachments now report their `prompt`/`text`, or `<attachment type>`
+  when they carry no human-readable payload.
+- **K14: kiro dropped every mid-run steering message.** When the human types
+  while kiro is working, the harness does not record a new `Prompt`: it wraps the
+  words in a `[LIVE STEERING - New message from user]` envelope and appends that
+  to the NEXT `ToolResults` entry. K1 admits only `Prompt` entries, and K6 dropped
+  the envelope on its bracket marker, so the text was invisible either way.
+  Measured on a real 306-session store: **312 to 411 messages exported (+99, a
+  31.7% increase)**, recovering all 112 steering messages (~13.6k chars). These
+  are the turns where the human corrects course mid-run ("i kinda need you to
+  hurry up please", "git history, code and log.md never lie"), so they carry more
+  signal per character than almost anything else in a session. Only the
+  `<user_message>` body is admitted: the harness instructions around it stay out,
+  and the 5630 `toolResult` blocks in those same content arrays are untouched.
+  Recovery runs in both `extract` and `timeline`, so the SessionSource law holds
+  (verified on the real store: 306 files, 485 messages, 0 violations).
+
+### Added
+
+- **SessionSource law test for the Claude backend** (`extract` ↔ `timeline`
+  agreement across 11 fixtures). kiro has had one since the multi-backend seam
+  landed; the Claude side did not, which is how a rule could halve the corpus
+  without a single test failing. Also verified against the real store: 286
+  sessions, 970 messages, 0 violations.
+- **Systemic-failure breaker on the digest stage.** Five consecutive
+  byte-identical failures now stop the stage instead of grinding through every
+  remaining session. Per-session containment is right for a session-specific
+  problem, but an unbroken streak of the same error is an environment problem (a
+  reshaped CLI envelope, a revoked credential), and each failure also burns the
+  runner's one corrective retry, so continuing buys the same error at two calls
+  apiece. Measured on a 12-session live run where every call failed: 5 sessions
+  attempted instead of 12, saving 14 doomed invocations, and the report names the
+  environment as the likely cause rather than listing 12 identical errors.
+  Anything already digested stays checkpointed, sessions that were never reached
+  are reported as `not attempted` so the count is never silently short, and
+  `--no-breaker` restores the attempt-everything behavior.
+
 ## [1.1.0] - 2026-07-17
 
 ### Added
@@ -115,7 +230,9 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0
+[1.1.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.1.0
 [1.0.2]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.2
 [1.0.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.1
 [1.0.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.0

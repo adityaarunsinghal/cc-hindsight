@@ -202,11 +202,85 @@ describe("confirm", () => {
   });
 });
 
+// Regression: readline DISCARDS a final line that arrives without a trailing
+// newline, so an answer typed as `y` and terminated by EOF (`printf y |`, a
+// Ctrl-D straight after the keystroke, or a harness that writes the byte and
+// closes) resolved to "" and was read as No. Observed in the wild as the
+// tell-tale `Proceed? [y/N] ydeclined; nothing was invoked.` — the user's `y`
+// echoed and was then ignored. Consent silently inverted is the worst possible
+// place for this: the user said yes and cc-hindsight said they declined.
+describe("confirm — answer without a trailing newline", () => {
+  it("accepts 'y' terminated by EOF instead of declining", async () => {
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("y"), output: cap.out });
+    expect(result).toBe("proceed");
+  });
+
+  it("accepts 'yes' terminated by EOF", async () => {
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("yes"), output: cap.out });
+    expect(result).toBe("proceed");
+  });
+
+  it("still trims and case-folds a newline-less answer", async () => {
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("  Y  "), output: cap.out });
+    expect(result).toBe("proceed");
+  });
+
+  it("still declines a newline-less 'n'", async () => {
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("n"), output: cap.out });
+    expect(result).toBe("declined");
+  });
+
+  it("reads only the FIRST line when more bytes follow", async () => {
+    // Recovery must not concatenate later input into the answer.
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("y\nleftover"), output: cap.out });
+    expect(result).toBe("proceed");
+  });
+
+  it("a newline-less 'garbage' answer still declines (default No holds)", async () => {
+    const cap = captureOutput();
+    const result = await confirm(PLAN, { input: inputWith("maybe"), output: cap.out });
+    expect(result).toBe("declined");
+  });
+});
+
 describe("askYesNo — EOF handling", () => {
   it("treats closed stdin as No (declines the --fresh-style gate)", async () => {
     const cap = captureOutput();
     const answer = await askYesNo("Proceed?", { input: eofInput(), output: cap.out });
     expect(answer).toBe(false);
+  });
+
+  it("accepts a newline-less 'y' (the --fresh gate must not invert a yes)", async () => {
+    const cap = captureOutput();
+    const answer = await askYesNo("Proceed?", { input: inputWith("y"), output: cap.out });
+    expect(answer).toBe(true);
+  });
+
+  it("honors a newline-less 'n' against a defaultYes prompt", async () => {
+    // The seamless-flow offers default to Yes; an explicit newline-less "n"
+    // must still mean no, or enter-to-accept UX would override a real refusal.
+    const cap = captureOutput();
+    const answer = await askYesNo("Show your library now?", {
+      input: inputWith("n"),
+      output: cap.out,
+      defaultYes: true,
+    });
+    expect(answer).toBe(false);
+  });
+
+  it("still applies defaultYes on genuine EOF (no bytes at all)", async () => {
+    const cap = captureOutput();
+    const answer = await askYesNo("Show your library now?", {
+      input: eofInput(),
+      output: cap.out,
+      defaultYes: true,
+    });
+    expect(answer).toBe(true);
   });
 });
 

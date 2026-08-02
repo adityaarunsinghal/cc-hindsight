@@ -104,6 +104,71 @@ describe("kiro extract — K5 negative (tool cancel is machine text)", () => {
   });
 });
 
+describe("kiro extract — K14 live-steering recovery", () => {
+  // Real kiro sessions wrap a message the human typed WHILE the agent was working
+  // in a harness envelope: "[LIVE STEERING - New message from user]" plus
+  // instructions, with the actual words inside a <user_message> tag. K6 dropped
+  // the whole envelope on its bracket marker, so every steering message was lost.
+  // Measured on a real 306-session store: 112 messages (~13.6k chars), and they
+  // are the highest-value turns a hindsight tool can see because they are where
+  // the human corrects course mid-run ("i kinda need you to hurry up please",
+  // "git history, code and log.md never lie"). Same shape of bug as the Claude
+  // side's R3, and the same fix shape as R10: recover BEFORE the drop.
+  it("recovers the human words from inside the steering envelope", () => {
+    const { messages } = extractKiroMessages(lines("k14-live-steering.jsonl"));
+    expect(messages.map((m) => m.text)).toEqual([
+      "add pagination to the users endpoint",
+      "actually use limit and offset, not cursors",
+    ]);
+  });
+
+  it("keeps the harness instructions out of the recovered text", () => {
+    const { messages } = extractKiroMessages(lines("k14-live-steering.jsonl"));
+    const steer = messages[1]?.text ?? "";
+    expect(steer).not.toContain("LIVE STEERING");
+    expect(steer).not.toContain("user_message");
+    expect(steer).not.toContain("IMPORTANT:");
+    expect(steer).not.toContain("STEERING steer-");
+  });
+
+  it("still drops an envelope whose user_message is empty", () => {
+    const { messages, drops } = extractKiroMessages(lines("k14-live-steering.jsonl"));
+    expect(messages).toHaveLength(2);
+    expect(drops.some((d) => d.reason.startsWith("K6"))).toBe(true);
+  });
+
+  it("satisfies the SessionSource law", () => {
+    const msgs = extractKiroMessages(lines("k14-live-steering.jsonl")).messages;
+    const human = kiroTimeline(lines("k14-live-steering.jsonl")).filter((e) => e.kind === "human");
+    expect(human.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
+      msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
+    );
+  });
+
+  it("recovers a steering message delivered on a ToolResults entry", () => {
+    // How it actually arrives in real sessions: 100 of 112 on a real store.
+    const { messages } = extractKiroMessages(lines("k14-steering-in-toolresults.jsonl"));
+    expect(messages.map((m) => m.text)).toEqual([
+      "refactor the widget loader",
+      "i kinda need you to hurry up please",
+    ]);
+  });
+
+  it("never admits toolResult machine output from the same entry", () => {
+    const { messages } = extractKiroMessages(lines("k14-steering-in-toolresults.jsonl"));
+    for (const m of messages) expect(m.text).not.toContain("file contents the agent read");
+  });
+
+  it("keeps extract and timeline in agreement for the ToolResults path", () => {
+    const f = "k14-steering-in-toolresults.jsonl";
+    const msgs = extractKiroMessages(lines(f)).messages;
+    const human = kiroTimeline(lines(f)).filter((e) => e.kind === "human");
+    expect(human.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
+      msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
+    );
+  });
+});
+
 describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", () => {
   // Every extracted human message must appear as a `human` timeline event with
   // identical (timestamp, text), in file order — the alignment invariant.

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { extractMessages } from "../src/core/extract.js";
+import { extractMessages, extractTimeline } from "../src/core/extract.js";
 
 /** Load a synthetic fixture as raw JSONL lines (never the real ~/.claude). */
 function load(name: string): string[] {
@@ -59,6 +59,26 @@ describe("R3 — attachment admission (human queued_command prompts only)", () =
   it("admits the human prompt, drops assistant-origin and non-prompt attachments", () => {
     expect(texts("r3-queued-command.jsonl")).toEqual(["Run the tests again."]);
     expect(reasons("r3-queued-command.jsonl")).toEqual([
+      "R3: non-human or non-prompt attachment",
+      "R3: non-human or non-prompt attachment",
+    ]);
+  });
+
+  // Regression: real transcripts carry the queued text in `prompt`, NOT `text`.
+  // The original fixture was hand-written with `text`, so the suite pinned a
+  // shape the CLI never emits and R3 silently dropped every genuinely-queued
+  // human message (measured on a real 286-session store: 253 messages, ~42.9k
+  // chars, i.e. 100% of human queued input). Both spellings are accepted now:
+  // `prompt` is what ships, `text` keeps the older fixture's contract.
+  it("reads the queued text from the real `prompt` field", () => {
+    expect(texts("r3-queued-command-prompt-field.jsonl")).toEqual(["its ok let it cook"]);
+  });
+
+  it("still drops a task-notification commandMode and assistant origin", () => {
+    // Same file: only the first entry is genuine typed input. A
+    // `commandMode: "task-notification"` queued_command is machine text (the
+    // agent reporting a finished background task), and must never be admitted.
+    expect(reasons("r3-queued-command-prompt-field.jsonl")).toEqual([
       "R3: non-human or non-prompt attachment",
       "R3: non-human or non-prompt attachment",
     ]);
@@ -195,4 +215,37 @@ describe("mixed-session — the regression wall (exact output, in order)", () =>
     expect(res.messages[0]?.timestamp).toBe("2026-02-01T00:00:00.000Z");
     expect(res.messages.at(-1)?.timestamp).toBe("2026-02-01T00:00:08.000Z");
   });
+});
+
+describe("claude extract — SessionSource law (extract ↔ timeline agreement)", () => {
+  // Every extracted human message must appear as a `human` timeline event with
+  // identical (timestamp, text), in file order. The dedupe key and the
+  // anaphora↔export index alignment both depend on it, so a divergence
+  // misattributes context to the wrong turn. kiro has had this test since the
+  // multi-backend seam landed; the claude side did not, which is how the R3
+  // field-name bug could halve the corpus without any test noticing.
+  // Verified separately against the real 286-session store: 970 messages, 0
+  // violations. Fixtures keep that check hermetic.
+  for (const fixture of [
+    "r1-admission.jsonl",
+    "r3-queued-command.jsonl",
+    "r3-queued-command-prompt-field.jsonl",
+    "r4-string-content.jsonl",
+    "r5-tool-rejection.jsonl",
+    "r6-interruption.jsonl",
+    "r7-decision.jsonl",
+    "r10-command.jsonl",
+    "r11-image.jsonl",
+    "mixed-session.jsonl",
+    "corrupt-lines.jsonl",
+  ]) {
+    it(`holds for ${fixture}`, () => {
+      const lines = load(fixture);
+      const msgs = extractMessages(lines).messages;
+      const humanEvents = extractTimeline(lines).filter((e) => e.kind === "human");
+      expect(humanEvents.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
+        msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
+      );
+    });
+  }
 });

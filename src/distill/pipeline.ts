@@ -27,7 +27,7 @@ import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { oneshotHash } from "../core/library.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
 import { withSpinner } from "../ui/progress.js";
-import { fail, green, skip as skipGlyph } from "../ui/style.js";
+import { dim, fail, green, skip as skipGlyph } from "../ui/style.js";
 
 /**
  * distill/pipeline.ts — stage orchestration, checkpoints, generations.
@@ -145,7 +145,29 @@ export interface DigestStageResult {
   failed: StageFailure[];
   /** Sessions blocked for exceeding the input budget under --truncate=never. */
   blocked: BlockedSession[];
+  /** True when the systemic-failure breaker stopped the stage early. */
+  aborted?: boolean;
+  /** Why the breaker tripped (shown to the user). */
+  abortReason?: string;
+  /**
+   * Sessions never attempted because the breaker tripped first. Reported so an
+   * aborted run still accounts for every eligible session (never a silent drop).
+   */
+  notAttempted: string[];
 }
+
+/**
+ * Consecutive identical failures that trip the systemic-failure breaker.
+ *
+ * Per-session containment is right for a session-specific problem, but an
+ * unbroken run of byte-identical errors is an environment problem (a reshaped
+ * CLI envelope, a revoked credential, a missing binary), and every further
+ * session pays for it twice over because each failure also burns the runner's
+ * one corrective retry. Five is comfortably past any plausible coincidence of
+ * distinct sessions failing the same way, and small enough to stop a 92-session
+ * run while it is still cheap.
+ */
+export const SYSTEMIC_FAILURE_STREAK = 5;
 
 /** Options for {@link runDigestStage}. */
 export interface DigestStageOptions {
@@ -167,6 +189,12 @@ export interface DigestStageOptions {
   timeoutMs?: number;
   /** Max digest calls in flight at once (default 1 — sequential). */
   concurrency?: number;
+  /**
+   * Systemic-failure breaker (default true): stop after
+   * {@link SYSTEMIC_FAILURE_STREAK} consecutive identical failures. `false`
+   * (`--no-breaker`) attempts every session regardless.
+   */
+  breaker?: boolean;
 }
 
 function truncate(s: string, max: number): string {
@@ -209,6 +237,17 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
   let completed = 0;
   let skipped = 0;
   const total = opts.entries.length;
+
+  // --- systemic-failure breaker (see SYSTEMIC_FAILURE_STREAK) ---------------
+  // Tracks the current run of byte-identical failure messages. Any success, or
+  // any differently-worded failure, resets it: only an unbroken streak looks
+  // like a broken environment rather than a set of unlucky sessions.
+  const breakerEnabled = opts.breaker !== false;
+  let streakMessage: string | null = null;
+  let streakCount = 0;
+  let aborted = false;
+  let abortReason: string | undefined;
+  const attempted = new Set<string>();
 
   /** Digest one session end-to-end (skip / read / budget / call / checkpoint). */
   const digestOne = async (entry: ManifestEntry, i: number): Promise<void> => {
@@ -269,12 +308,43 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       checkpoint.digests[entry.export] = digest;
       saveDigests(opts.home, checkpoint); // after each — Ctrl-C safe
       completed++;
+      // A success proves the environment works: the streak is not systemic.
+      streakMessage = null;
+      streakCount = 0;
       write(`  ${label} → ${green(digest.outcome)}: ${truncate(digest.goal, 70)}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failed.push({ export: entry.export, error: message });
       write(`  ${label} ${fail(`failed: ${truncate(message, 120)}`)}`);
-      // continue — one failure doesn't abort the rest
+      // continue — one failure doesn't abort the rest (per-session containment).
+      // But an unbroken run of IDENTICAL failures is an environment problem, and
+      // continuing just buys the same error N more times at two calls each.
+      if (message === streakMessage) {
+        streakCount++;
+      } else {
+        streakMessage = message;
+        streakCount = 1;
+      }
+      if (
+        breakerEnabled &&
+        !aborted &&
+        streakCount >= SYSTEMIC_FAILURE_STREAK &&
+        total > SYSTEMIC_FAILURE_STREAK
+      ) {
+        aborted = true;
+        abortReason =
+          `${streakCount} consecutive sessions failed with the identical error, which points at ` +
+          "the environment rather than these sessions. Stopping before spending more calls";
+        write("");
+        write(fail(`  ⚠ ${abortReason}:`));
+        write(`      ${truncate(message, 160)}`);
+        write(
+          dim(
+            "      Nothing already digested is lost; fix the cause and re-run to resume.\n" +
+              "      Re-run with --no-breaker to attempt every session anyway.",
+          ),
+        );
+      }
     }
   };
 
@@ -283,16 +353,38 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
   let nextIndex = 0;
   const worker = async (): Promise<void> => {
     while (nextIndex < opts.entries.length) {
+      // Stop pulling new work once the breaker trips. In-flight siblings finish
+      // naturally, so nothing is abandoned mid-write and the checkpoint stays
+      // consistent.
+      if (aborted) return;
       const i = nextIndex++;
       const entry = opts.entries[i];
-      if (entry) await digestOne(entry, i);
+      if (entry) {
+        attempted.add(entry.export);
+        await digestOne(entry, i);
+      }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(concurrency, Math.max(total, 1)) }, () => worker()),
   );
 
-  return { generation: checkpoint.generation, completed, skipped, failed, blocked };
+  // Account for every eligible session: an aborted run reports what it never
+  // reached rather than leaving the count silently short.
+  const notAttempted = opts.entries.map((e) => e.export).filter((name) => !attempted.has(name));
+  if (aborted && notAttempted.length > 0) {
+    write(dim(`      ${notAttempted.length} session(s) not attempted.`));
+  }
+
+  return {
+    generation: checkpoint.generation,
+    completed,
+    skipped,
+    failed,
+    blocked,
+    notAttempted,
+    ...(aborted ? { aborted, abortReason } : {}),
+  };
 }
 
 // --- stage 2: cluster --------------------------------------------------------
