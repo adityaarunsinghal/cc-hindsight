@@ -8,12 +8,18 @@ import {
   type AuthorMemberInput,
   buildAuthorPrompt,
 } from "../claude/prompts/author.js";
-import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../claude/prompts/cluster.js";
+import {
+  buildClusterPrompt,
+  buildMergePrompt,
+  CLUSTER_PROMPT_VERSION,
+} from "../claude/prompts/cluster.js";
 import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../claude/prompts/digest.js";
 import { DEFAULT_TIMEOUT_MS, type RunClaudeOptions, runClaude } from "../claude/runner.js";
 import {
   AuthorSchema,
   type Cluster,
+  type ClusterMerge,
+  ClusterMergeSchema,
   ClusterSchema,
   type ClusterTask,
   type Digest,
@@ -564,6 +570,98 @@ export interface ClusterStageResult {
  */
 export const CLUSTER_TIMEOUT_PER_DIGEST_MS = 5_000;
 
+/**
+ * Split the corpus into clustering windows whose prompts each fit the input
+ * budget. Returns one window (all ids, sorted) when the whole prompt fits or
+ * no budget is known; otherwise greedily packs sorted ids so every window's
+ * prompt stays within budget (a single oversized digest still gets its own
+ * window rather than being dropped). Sorted, deterministic, order-preserving:
+ * re-running the same corpus plans the same windows.
+ */
+export function planClusterWindows(
+  digests: Record<string, Digest>,
+  origins: Record<string, "claude" | "kiro"> | undefined,
+  budget: number | undefined,
+): string[][] {
+  const ids = Object.keys(digests).sort();
+  if (budget === undefined || buildClusterPrompt(digests, origins).length <= budget) return [ids];
+
+  // Fixed prompt scaffolding cost, measured with zero digests.
+  const overhead = buildClusterPrompt({}, origins).length;
+  const cost = (id: string): number => {
+    const d = digests[id];
+    const one = d ? { [id]: d } : {};
+    return buildClusterPrompt(one, origins).length - overhead;
+  };
+
+  const windows: string[][] = [];
+  let current: string[] = [];
+  let used = overhead;
+  for (const id of ids) {
+    const c = cost(id);
+    if (current.length > 0 && used + c > budget) {
+      windows.push(current);
+      current = [];
+      used = overhead;
+    }
+    current.push(id);
+    used += c;
+  }
+  if (current.length > 0) windows.push(current);
+  return windows;
+}
+
+/**
+ * Apply a merge response to the combined window tasks. Deterministic and
+ * defensive: an entry is applied only when every referenced slug exists, it
+ * names at least two tasks, and no slug was already consumed by an earlier
+ * entry; anything else is skipped with a note (the unmerged union is still a
+ * fully valid grouping). Members of merged tasks are unioned and deduped.
+ */
+export function applyClusterMerges(
+  tasks: ClusterTask[],
+  merges: ClusterMerge["merges"],
+): { tasks: ClusterTask[]; notes: string[] } {
+  const bySlug = new Map(tasks.map((t) => [t.slug, t]));
+  const consumed = new Set<string>();
+  const merged: ClusterTask[] = [];
+  const notes: string[] = [];
+
+  for (const entry of merges) {
+    const missing = entry.slugs.filter((s) => !bySlug.has(s));
+    if (missing.length > 0) {
+      notes.push(`merge skipped: unknown slug(s) ${missing.join(", ")}`);
+      continue;
+    }
+    if (entry.slugs.length < 2) {
+      notes.push(`merge skipped: fewer than two slugs (${entry.slugs.join(", ") || "none"})`);
+      continue;
+    }
+    const doubly = entry.slugs.filter((s) => consumed.has(s));
+    if (doubly.length > 0) {
+      notes.push(`merge skipped: slug(s) already merged ${doubly.join(", ")}`);
+      continue;
+    }
+    for (const s of entry.slugs) consumed.add(s);
+    const members = [
+      ...new Set(entry.slugs.flatMap((s) => (bySlug.get(s) as ClusterTask).members)),
+    ];
+    merged.push({ slug: entry.slug, title: entry.title, rationale: entry.rationale, members });
+  }
+
+  const kept = tasks.filter((t) => !consumed.has(t.slug));
+  // A merged slug may collide with a kept task's slug; suffix deterministically.
+  const finalTasks = [...kept];
+  const seen = new Set(kept.map((t) => t.slug));
+  for (const m of merged) {
+    let slug = m.slug;
+    for (let n = 2; seen.has(slug); n++) slug = `${m.slug}-${n}`;
+    seen.add(slug);
+    finalTasks.push(slug === m.slug ? m : { ...m, slug });
+  }
+  return { tasks: finalTasks, notes };
+}
+
 /** Options for {@link runClusterStage}. */
 export interface ClusterStageOptions {
   home: string;
@@ -583,7 +681,9 @@ export interface ClusterStageOptions {
 }
 
 /**
- * Stage 2 — cluster all digests into semantic tasks (one call total).
+ * Stage 2 — cluster all digests into semantic tasks. One call when the corpus
+ * prompt fits the input budget; otherwise windowed: one call per window plus
+ * one best-effort merge call that unifies cross-window duplicates.
  *
  * Resumable: a tasks.json from the same generation covering the same input set
  * is reused without a call. Semantic validation failures (duplicate slugs,
@@ -592,7 +692,6 @@ export interface ClusterStageOptions {
  * the command reports and exits non-zero, re-running resumes.
  */
 export async function runClusterStage(opts: ClusterStageOptions): Promise<ClusterStageResult> {
-  const runner: RunnerFn = opts.runner ?? runClaude;
   const out = opts.output ?? process.stdout;
   const write = (s: string) => out.write(`${s}\n`);
   const inputIds = Object.keys(opts.digests).sort();
@@ -626,56 +725,36 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
       `  --no-group: synthesized ${cluster.tasks.length} task(s) deterministically (no claude call)`,
     );
   } else {
-    write(`  clustering ${inputIds.length} digest(s)…`);
-    // One call over the whole corpus: scale the default timeout with input
-    // size (base + per-digest allowance). An explicit --timeout wins as-is.
-    const timeoutMs =
-      opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * inputIds.length;
-    const basePrompt = buildClusterPrompt(opts.digests, opts.origins);
-    // Cluster is a single call over ALL digests; warn (don't block) if the set
-    // is large enough to risk a context rejection (the eventual answer is
-    // windowed clustering — a roadmap item).
-    if (opts.budget !== undefined && basePrompt.length > opts.budget) {
+    const windows = planClusterWindows(opts.digests, opts.origins, opts.budget);
+    if (windows.length === 1) {
+      write(`  clustering ${inputIds.length} digest(s)…`);
+      cluster = await clusterWindow(windows[0] as string[], opts, out, "");
+    } else {
+      // Windowed clustering: the whole-corpus prompt exceeds the input budget,
+      // so cluster each window independently, then unify cross-window
+      // duplicates with one merge call over the task identities.
       write(
-        `  ⚠ clustering ${inputIds.length} digests is ${basePrompt.length} chars (> budget ${opts.budget}); ` +
-          "this may hit a model/context limit. Consider --project to narrow scope.",
+        `  clustering ${inputIds.length} digest(s) in ${windows.length} windows ` +
+          `(corpus exceeds the input budget of ${opts.budget} chars)…`,
       );
-    }
-    cluster = canonicalizeClusterIds(
-      await withSpinner(out, `clustering ${inputIds.length} digest(s)`, () =>
-        runner({
-          prompt: basePrompt,
-          schema: ClusterSchema,
-          model: opts.model,
-          timeoutMs,
-        }),
-      ),
-      inputIds,
-    );
-
-    let problems = validateCluster(cluster, inputIds);
-    if (problems.length > 0) {
-      write(`      response failed validation (${problems.length} problem(s)); retrying once…`);
-      const corrective =
-        `${basePrompt}\n\nYour previous grouping had these problems:\n` +
-        `${problems.map((p) => `- ${p}`).join("\n")}\n` +
-        "Produce a corrected grouping that fixes every problem. Remember: every id in at " +
-        "least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.";
-      cluster = canonicalizeClusterIds(
-        await withSpinner(out, "retrying with corrections", () =>
-          runner({
-            prompt: corrective,
-            schema: ClusterSchema,
-            model: opts.model,
-            timeoutMs,
-          }),
-        ),
-        inputIds,
-      );
-      problems = validateCluster(cluster, inputIds);
-      if (problems.length > 0) {
-        throw new Error(`clustering failed validation after one retry: ${problems.join("; ")}`);
+      const combined: ClusterTask[] = [];
+      const misc: string[] = [];
+      const usedSlugs = new Set<string>();
+      for (const [i, windowIds] of windows.entries()) {
+        const label = ` [window ${i + 1}/${windows.length}]`;
+        const windowCluster = await clusterWindow(windowIds, opts, out, label);
+        for (const task of windowCluster.tasks) {
+          // The same slug can legitimately appear in two windows; suffix the
+          // later one so the merge call can still address both.
+          let slug = task.slug;
+          for (let n = 2; usedSlugs.has(slug); n++) slug = `${task.slug}-${n}`;
+          usedSlugs.add(slug);
+          combined.push(slug === task.slug ? task : { ...task, slug });
+        }
+        misc.push(...windowCluster.misc);
       }
+
+      cluster = await mergeWindowTasks(combined, misc, opts, out);
     }
   }
 
@@ -691,6 +770,115 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     `      → ${cluster.tasks.length} task(s), ${cluster.misc.length} session(s) routed to misc`,
   );
   return { generation: opts.generation, tasks: cluster.tasks, misc: cluster.misc, resumed: false };
+}
+
+/**
+ * Cluster one window of ids: one call plus one corrective retry when the
+ * response fails semantic validation (against THIS window's ids). The default
+ * timeout scales with the window's digest count; an explicit --timeout wins.
+ */
+async function clusterWindow(
+  windowIds: string[],
+  opts: ClusterStageOptions,
+  out: Writable,
+  label: string,
+): Promise<Cluster> {
+  const runner: RunnerFn = opts.runner ?? runClaude;
+  const write = (s: string) => out.write(`${s}\n`);
+  const digests: Record<string, Digest> = {};
+  for (const id of windowIds) {
+    const d = opts.digests[id];
+    if (d) digests[id] = d;
+  }
+  const timeoutMs =
+    opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * windowIds.length;
+  const basePrompt = buildClusterPrompt(digests, opts.origins);
+
+  let cluster = canonicalizeClusterIds(
+    await withSpinner(out, `clustering ${windowIds.length} digest(s)${label}`, () =>
+      runner({
+        prompt: basePrompt,
+        schema: ClusterSchema,
+        model: opts.model,
+        timeoutMs,
+      }),
+    ),
+    windowIds,
+  );
+
+  let problems = validateCluster(cluster, windowIds);
+  if (problems.length > 0) {
+    write(`      response failed validation (${problems.length} problem(s)); retrying once…`);
+    const corrective =
+      `${basePrompt}\n\nYour previous grouping had these problems:\n` +
+      `${problems.map((p) => `- ${p}`).join("\n")}\n` +
+      "Produce a corrected grouping that fixes every problem. Remember: every id in at " +
+      "least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.";
+    cluster = canonicalizeClusterIds(
+      await withSpinner(out, `retrying with corrections${label}`, () =>
+        runner({
+          prompt: corrective,
+          schema: ClusterSchema,
+          model: opts.model,
+          timeoutMs,
+        }),
+      ),
+      windowIds,
+    );
+    problems = validateCluster(cluster, windowIds);
+    if (problems.length > 0) {
+      throw new Error(`clustering failed validation after one retry: ${problems.join("; ")}`);
+    }
+  }
+  return cluster;
+}
+
+/**
+ * Unify cross-window duplicate tasks with one merge call over the combined
+ * task identities. Best-effort by design: window clustering already produced
+ * a fully valid grouping, so a failed or partially invalid merge response
+ * degrades to (parts of) the unmerged union with a note instead of failing
+ * the stage.
+ */
+async function mergeWindowTasks(
+  combined: ClusterTask[],
+  misc: string[],
+  opts: ClusterStageOptions,
+  out: Writable,
+): Promise<Cluster> {
+  const runner: RunnerFn = opts.runner ?? runClaude;
+  const write = (s: string) => out.write(`${s}\n`);
+  const uniqueMisc = [...new Set(misc)];
+  if (combined.length < 2) return { tasks: combined, misc: uniqueMisc };
+
+  const timeoutMs =
+    opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * combined.length;
+  let merge: ClusterMerge;
+  try {
+    merge = await withSpinner(
+      out,
+      `merging ${combined.length} window task(s) into a unified grouping`,
+      () =>
+        runner({
+          prompt: buildMergePrompt(combined),
+          schema: ClusterMergeSchema,
+          model: opts.model,
+          timeoutMs,
+        }),
+    );
+  } catch (err) {
+    write(
+      `      merge call failed (${err instanceof Error ? err.message : String(err)}); ` +
+        "keeping the per-window tasks unmerged.",
+    );
+    return { tasks: combined, misc: uniqueMisc };
+  }
+
+  const { tasks, notes } = applyClusterMerges(combined, merge.merges);
+  for (const note of notes) write(`      ⚠ ${note}`);
+  const applied = merge.merges.length - notes.length;
+  if (applied > 0) write(`      merged ${combined.length} window task(s) → ${tasks.length}`);
+  return { tasks, misc: uniqueMisc };
 }
 
 // --- stage 3: author ---------------------------------------------------------

@@ -36,6 +36,25 @@ export type Cluster = z.infer<typeof ClusterSchema>;
 export type ClusterTask = Cluster["tasks"][number];
 
 /**
+ * Stage 2b, windowed clustering only: which window-local tasks are really the
+ * same task. `merges` lists groups of existing slugs to unify; tasks not
+ * mentioned stay as they are. Empty `merges` means nothing overlaps.
+ */
+export const ClusterMergeSchema = z.object({
+  merges: z.array(
+    z.object({
+      /** Slugs of the existing tasks to unify (two or more). */
+      slugs: z.array(z.string()),
+      /** Replacement identity for the unified task. */
+      slug: z.string(),
+      title: z.string(),
+      rationale: z.string(),
+    }),
+  ),
+});
+export type ClusterMerge = z.infer<typeof ClusterMergeSchema>;
+
+/**
  * Semantic floor for an authored oneshot body, in characters.
  *
  * A plain `z.string()` accepts degenerate bodies — a model can return

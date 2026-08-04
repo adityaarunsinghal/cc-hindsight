@@ -6,6 +6,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Windowed clustering for corpora that exceed the input budget.** The
+  cluster stage previously sent one prompt over ALL digests and merely warned
+  when that prompt exceeded `--input-budget`. Now it splits the corpus into
+  deterministic windows whose prompts each fit the budget, clusters every
+  window independently (same validation and corrective retry per window), and
+  unifies cross-window duplicate tasks with one best-effort merge call over
+  the task identities. A failed or partially invalid merge response degrades
+  to the still-valid unmerged union with a note, never a lost run. Nothing
+  changes for corpora that fit: a single call as before.
+
 ### Fixed
 
 - **A finished run could still refuse to exit.** Settling a spawn on child
