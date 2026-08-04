@@ -27,10 +27,15 @@ export type ClipboardSpawn = (
 const defaultSpawn: ClipboardSpawn = (cmd, args, input) =>
   new Promise((resolve) => {
     const child = nodeSpawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"] });
+    // A clipboard tool that HANGS (xclip holding the selection) must never
+    // keep this process alive: unref the child and destroy stdin on settle,
+    // so even when the copy times out upstream the event loop can drain.
+    child.unref();
     let settled = false;
     const settle = (v: { code: number | null; error?: string }) => {
       if (settled) return;
       settled = true;
+      child.stdin?.destroy();
       resolve(v);
     };
     child.on("error", (err) => settle({ code: null, error: err.message }));
@@ -41,6 +46,12 @@ const defaultSpawn: ClipboardSpawn = (cmd, args, input) =>
     // The tool may exit before the text is fully written (ENOENT, no display),
     // which raises EPIPE on stdin; with no listener that is an uncaught throw.
     child.stdin?.on("error", () => {});
+    // Once the block has flushed into the pipe, release the stdin handle too:
+    // it is the one remaining ref'd handle when the tool hangs, and the data
+    // already in the pipe stays readable by the tool regardless.
+    child.stdin?.once("finish", () =>
+      (child.stdin as unknown as { unref?: () => void })?.unref?.(),
+    );
     child.stdin?.write(input);
     child.stdin?.end();
   });

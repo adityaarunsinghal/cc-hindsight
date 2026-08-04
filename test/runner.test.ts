@@ -470,6 +470,32 @@ describe("defaultIo.spawn — a child that outlives its stdout pipe", () => {
     });
     expect(res.code).toBe(3);
   }, 40_000);
+
+  it("releases the child's stdio handles on settle so the process can exit", async () => {
+    // Sequel to the resolve-on-exit fix: settling early leaves the child's
+    // stdio streams OPEN whenever a grandchild inherited the pipes (or the
+    // child was killed mid-write). Those streams are ref'd libuv handles, so
+    // even though every promise resolved, the process cannot exit. Observed
+    // live: a finished distill run lingered 20+ minutes holding exactly two
+    // orphaned child-stdio sockets; destroying them made it exit immediately.
+    type HandleCarrier = { _getActiveHandles?: () => unknown[] };
+    const getHandles = () =>
+      new Set(((process as HandleCarrier)._getActiveHandles?.() ?? []) as object[]);
+    const before = getHandles();
+    const res = await defaultIo.spawn("/bin/sh", ["-c", "sleep 20 & echo held; exit 0"], {
+      input: "",
+      timeoutMs: 15_000,
+    });
+    expect(res.stdout).toContain("held");
+    // One macrotask for any destroy() teardown to complete.
+    await new Promise((r) => setImmediate(r));
+    const leaked = [...getHandles()].filter(
+      (h) => !before.has(h) && h?.constructor?.name === "Socket",
+    );
+    // While the grandchild `sleep` is STILL alive (it holds the pipe write
+    // ends for ~20s), our side of those pipes must already be gone.
+    expect(leaked).toEqual([]);
+  }, 40_000);
 });
 
 describe("probeCapabilities", () => {
