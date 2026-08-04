@@ -4,6 +4,18 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Clustering timed out on large stores.** The cluster stage is a single call
+  over ALL digests, but it inherited the flat 5-minute per-call default sized
+  for one-session digest calls; at 84 digests the call reliably exceeded it and
+  the run stopped at `✗ claude invocation timed out after 300000ms`. The
+  cluster call's default timeout now scales with input size
+  (5 min base + 5s per digest; 12 min at 84). An explicit `--timeout` still
+  passes through unscaled, on the corrective retry too.
+
 ## [1.2.0] - 2026-08-02
 
 ### Fixed

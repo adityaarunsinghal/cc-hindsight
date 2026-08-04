@@ -5,8 +5,10 @@ import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
+import { DEFAULT_TIMEOUT_MS } from "../src/claude/runner.js";
 import type { Cluster, Digest } from "../src/claude/schemas.js";
 import {
+  CLUSTER_TIMEOUT_PER_DIGEST_MS,
   canonicalizeClusterIds,
   loadTasks,
   type RunnerFn,
@@ -302,6 +304,37 @@ describe("runClusterStage", () => {
     expect(result.tasks).toHaveLength(3);
     expect(result.misc).toEqual([]);
     expect(loadTasks(home)?.generation).toBe("g1");
+  });
+
+  it("scales the default timeout with the digest count (single call over the corpus)", async () => {
+    const home = tmpHome();
+    const seen: (number | undefined)[] = [];
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen.push(opts.timeoutMs);
+      return VALID;
+    }) as RunnerFn;
+    await runClusterStage({ home, digests: DIGESTS, generation: "g1", runner, output: sink() });
+    expect(seen).toEqual([DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * IDS.length]);
+  });
+
+  it("passes an explicit --timeout through unscaled, including on the corrective retry", async () => {
+    const home = tmpHome();
+    const bad: Cluster = { tasks: VALID.tasks, misc: [] }; // drops cli-c3.md → one retry
+    const seen: (number | undefined)[] = [];
+    let call = 0;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen.push(opts.timeoutMs);
+      return call++ === 0 ? bad : VALID;
+    }) as RunnerFn;
+    await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      timeoutMs: 42_000,
+      runner,
+      output: sink(),
+    });
+    expect(seen).toEqual([42_000, 42_000]);
   });
 });
 

@@ -10,7 +10,7 @@ import {
 } from "../claude/prompts/author.js";
 import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../claude/prompts/cluster.js";
 import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../claude/prompts/digest.js";
-import { type RunClaudeOptions, runClaude } from "../claude/runner.js";
+import { DEFAULT_TIMEOUT_MS, type RunClaudeOptions, runClaude } from "../claude/runner.js";
 import {
   AuthorSchema,
   type Cluster,
@@ -555,6 +555,15 @@ export interface ClusterStageResult {
   resumed: boolean;
 }
 
+/**
+ * Extra timeout allowance per digest for the cluster call. Clustering is a
+ * SINGLE call over ALL digests, so unlike digest/author calls its wall-clock
+ * cost grows with corpus size; the flat {@link DEFAULT_TIMEOUT_MS} that suits
+ * per-session calls times out on large runs (observed at 84 digests). An
+ * explicit `--timeout` still wins over the scaled default.
+ */
+export const CLUSTER_TIMEOUT_PER_DIGEST_MS = 5_000;
+
 /** Options for {@link runClusterStage}. */
 export interface ClusterStageOptions {
   home: string;
@@ -618,6 +627,10 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     );
   } else {
     write(`  clustering ${inputIds.length} digest(s)…`);
+    // One call over the whole corpus: scale the default timeout with input
+    // size (base + per-digest allowance). An explicit --timeout wins as-is.
+    const timeoutMs =
+      opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * inputIds.length;
     const basePrompt = buildClusterPrompt(opts.digests, opts.origins);
     // Cluster is a single call over ALL digests; warn (don't block) if the set
     // is large enough to risk a context rejection (the eventual answer is
@@ -634,7 +647,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
           prompt: basePrompt,
           schema: ClusterSchema,
           model: opts.model,
-          timeoutMs: opts.timeoutMs,
+          timeoutMs,
         }),
       ),
       inputIds,
@@ -654,7 +667,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
             prompt: corrective,
             schema: ClusterSchema,
             model: opts.model,
-            timeoutMs: opts.timeoutMs,
+            timeoutMs,
           }),
         ),
         inputIds,
