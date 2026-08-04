@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A finished run could still refuse to exit.** Settling a spawn on child
+  `exit` (v1.2.0) fixed the await-side hang, but the settled child's stdio
+  streams were never destroyed. Whenever a grandchild inherited the pipes or
+  the child was killed mid-write (a timed-out call), those streams stayed
+  ref'd and held the event loop open after all work was done. Observed live:
+  a finished `distill` lingered 20+ minutes holding exactly two orphaned
+  child-stdio sockets; destroying them via an attached inspector made it exit
+  immediately. The runner spawn now destroys the child's stdio on every settle
+  path, and the clipboard spawn unrefs its child and stdin so a hanging
+  clipboard tool can never hold the process either.
+- **Preferences consolidation timed out on large stores.** Same defect family
+  as the clustering timeout below: consolidation is a single call over EVERY
+  aggregated preference but inherited the flat 5-minute default, and died at
+  exactly 300000ms twice on a real 80+ preference store (which is also what
+  triggered the lingering-exit hang above). The default now scales with the
+  preference count (5 min base + 5s each); `preferences` gained a `--timeout`
+  flag, and `distill --timeout` reaches the end-of-run cascade's call too.
 - **Clustering timed out on large stores.** The cluster stage is a single call
   over ALL digests, but it inherited the flat 5-minute per-call default sized
   for one-session digest calls; at 84 digests the call reliably exceeded it and
