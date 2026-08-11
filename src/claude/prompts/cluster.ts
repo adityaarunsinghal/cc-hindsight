@@ -82,3 +82,44 @@ export function buildClusterPrompt(
     "=== END SESSION DIGESTS ===",
   ].join("\n");
 }
+
+/**
+ * Build the stage-2b merge prompt (windowed clustering only). When the corpus
+ * exceeds the input budget, digests are clustered in windows; each window
+ * produces tasks that cannot see the other windows' sessions, so the same
+ * underlying goal can surface as two tasks. This prompt shows every task's
+ * identity card and asks ONLY for cross-task unification, never re-grouping
+ * of members.
+ */
+export function buildMergePrompt(
+  tasks: { slug: string; title: string; rationale: string; members: string[] }[],
+): string {
+  const blocks = tasks.map((t) =>
+    [
+      `- slug: ${t.slug}`,
+      `  title: ${t.title}`,
+      `  rationale: ${t.rationale}`,
+      `  sessions: ${t.members.length}`,
+    ].join("\n"),
+  );
+  return [
+    "You are unifying tasks that were produced by clustering a large corpus of",
+    "coding-agent sessions in independent windows. Tasks from different windows",
+    "may describe the SAME underlying goal. Below is every task's identity.",
+    "",
+    "Identify groups of two or more tasks that pursue the same underlying goal:",
+    '- For each group output one entry in "merges" with:',
+    '  - "slugs": the existing slugs to unify (copied VERBATIM, two or more);',
+    '  - "slug": a unique kebab-case identifier of 2-5 words for the unified task;',
+    '  - "title": a short human-readable title;',
+    '  - "rationale": one or two sentences on why these are one task.',
+    '- Use ONLY the slugs listed below; never invent slugs in "slugs".',
+    "- List each existing slug in AT MOST one merge group.",
+    "- Tasks you do not mention stay unchanged. If nothing overlaps, return",
+    '  { "merges": [] }.',
+    "",
+    `=== TASKS (${tasks.length}) ===`,
+    ...blocks,
+    "=== END TASKS ===",
+  ].join("\n");
+}

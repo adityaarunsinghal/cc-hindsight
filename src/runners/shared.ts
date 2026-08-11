@@ -129,6 +129,18 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
       if (settled) return;
       settled = true;
       clearTimers();
+      // Settling on `exit` (or killing on timeout) leaves the stdio streams
+      // open whenever a grandchild inherited the pipes or the child died
+      // mid-write. Those streams are ref'd libuv handles, so they keep THIS
+      // process alive at the very end even though every promise resolved long
+      // ago: observed as a finished distill run whose node lingered 20+
+      // minutes, holding exactly two orphaned child-stdio sockets. Nothing is
+      // lost by destroying here: on the `close` path the pipes are already
+      // drained, and on the `exit` path settle() runs a macrotask after the
+      // buffered 'data' events flushed.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
       resolve({ code, signal, stdout, stderr, timedOut });
     };
 
@@ -136,6 +148,9 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
       if (settled) return;
       settled = true;
       clearTimers();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
       reject(err);
     });
 

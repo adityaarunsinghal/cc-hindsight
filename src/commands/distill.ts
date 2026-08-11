@@ -582,6 +582,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
             canPrompt,
             sourceMode,
             model: args.model,
+            timeoutMs,
             deps,
             output: out,
           });
@@ -618,10 +619,13 @@ async function offerPreferencesCascade(opts: {
   canPrompt: boolean;
   sourceMode: "claude" | "kiro" | "auto";
   model?: string;
+  /** Explicit --timeout (ms); absent means the consolidation call scales its own. */
+  timeoutMs?: number;
   deps: DistillDeps;
   output: Writable;
 }): Promise<void> {
-  const { home, runner, runnerName, yes, canPrompt, sourceMode, model, deps, output } = opts;
+  const { home, runner, runnerName, yes, canPrompt, sourceMode, model, timeoutMs, deps, output } =
+    opts;
   const write = (s = "") => output.write(`${s}\n`);
 
   const entries = readLibrary(home);
@@ -647,6 +651,7 @@ async function offerPreferencesCascade(opts: {
     target,
     runner,
     model,
+    timeoutMs,
     output,
   });
   if (merged === null || block === null) return; // failure already rendered the fallback

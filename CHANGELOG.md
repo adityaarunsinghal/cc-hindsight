@@ -4,6 +4,58 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-08-11
+
+### Added
+
+- **Windowed clustering for corpora that exceed the input budget.** The
+  cluster stage previously sent one prompt over ALL digests and merely warned
+  when that prompt exceeded `--input-budget`. Now it splits the corpus into
+  deterministic windows whose prompts each fit the budget, clusters every
+  window independently (same validation and corrective retry per window), and
+  unifies cross-window duplicate tasks with one best-effort merge call over
+  the task identities. A failed or partially invalid merge response degrades
+  to the still-valid unmerged union with a note, never a lost run. Nothing
+  changes for corpora that fit: a single call as before.
+
+### Fixed
+
+- **A windowed clustering merge could write an unusable task slug.** Every other
+  cluster response passes `validateCluster` before anything is saved, but the
+  merge call runs after per-window validation and its schema types the
+  replacement slug as a plain string, so a response of `"Payments Work"` (or
+  `"../../escaped"`) was applied verbatim. A task slug is also a path component
+  (`library/<slug>/…`), so that reached the filesystem. Malformed replacement
+  slugs are now skipped with a note, keeping the still-valid unmerged union.
+  Relatedly, de-duplicating a colliding slug appended a sixth word to an
+  already-5-word slug, which `validateCluster` rejects; the suffix now replaces
+  the final word instead, so both the merge and cross-window collision paths
+  stay within the 2-5 word rule. Only reachable on the windowed path.
+- **A finished run could still refuse to exit.** Settling a spawn on child
+  `exit` (v1.2.0) fixed the await-side hang, but the settled child's stdio
+  streams were never destroyed. Whenever a grandchild inherited the pipes or
+  the child was killed mid-write (a timed-out call), those streams stayed
+  ref'd and held the event loop open after all work was done. Observed live:
+  a finished `distill` lingered 20+ minutes holding exactly two orphaned
+  child-stdio sockets; destroying them via an attached inspector made it exit
+  immediately. The runner spawn now destroys the child's stdio on every settle
+  path, and the clipboard spawn unrefs its child and stdin so a hanging
+  clipboard tool can never hold the process either.
+- **Preferences consolidation timed out on large stores.** Same defect family
+  as the clustering timeout below: consolidation is a single call over EVERY
+  aggregated preference but inherited the flat 5-minute default, and died at
+  exactly 300000ms twice on a real 80+ preference store (which is also what
+  triggered the lingering-exit hang above). The default now scales with the
+  preference count (5 min base + 5s each); `preferences` gained a `--timeout`
+  flag, and `distill --timeout` reaches the end-of-run cascade's call too.
+- **Clustering timed out on large stores.** The cluster stage is a single call
+  over ALL digests, but it inherited the flat 5-minute per-call default sized
+  for one-session digest calls; at 84 digests the call reliably exceeded it and
+  the run stopped at `✗ claude invocation timed out after 300000ms`. The
+  cluster call's default timeout now scales with input size
+  (5 min base + 5s per digest; 12 min at 84). An explicit `--timeout` still
+  passes through unscaled, on the corrective retry too.
+
 ## [1.2.0] - 2026-08-02
 
 ### Fixed
@@ -230,7 +282,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0
 [1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0
 [1.1.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.1.0
 [1.0.2]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.2

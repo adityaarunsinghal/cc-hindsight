@@ -5,10 +5,14 @@ import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
-import type { Cluster, Digest } from "../src/claude/schemas.js";
+import { DEFAULT_TIMEOUT_MS } from "../src/claude/runner.js";
+import type { Cluster, ClusterTask, Digest } from "../src/claude/schemas.js";
 import {
+  applyClusterMerges,
+  CLUSTER_TIMEOUT_PER_DIGEST_MS,
   canonicalizeClusterIds,
   loadTasks,
+  planClusterWindows,
   type RunnerFn,
   runClusterStage,
   saveTasks,
@@ -302,6 +306,281 @@ describe("runClusterStage", () => {
     expect(result.tasks).toHaveLength(3);
     expect(result.misc).toEqual([]);
     expect(loadTasks(home)?.generation).toBe("g1");
+  });
+
+  it("scales the default timeout with the digest count (single call over the corpus)", async () => {
+    const home = tmpHome();
+    const seen: (number | undefined)[] = [];
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen.push(opts.timeoutMs);
+      return VALID;
+    }) as RunnerFn;
+    await runClusterStage({ home, digests: DIGESTS, generation: "g1", runner, output: sink() });
+    expect(seen).toEqual([DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * IDS.length]);
+  });
+
+  it("passes an explicit --timeout through unscaled, including on the corrective retry", async () => {
+    const home = tmpHome();
+    const bad: Cluster = { tasks: VALID.tasks, misc: [] }; // drops cli-c3.md → one retry
+    const seen: (number | undefined)[] = [];
+    let call = 0;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen.push(opts.timeoutMs);
+      return call++ === 0 ? bad : VALID;
+    }) as RunnerFn;
+    await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      timeoutMs: 42_000,
+      runner,
+      output: sink(),
+    });
+    expect(seen).toEqual([42_000, 42_000]);
+  });
+});
+
+describe("planClusterWindows", () => {
+  it("returns one window with all ids when the prompt fits (or no budget)", () => {
+    expect(planClusterWindows(DIGESTS, undefined, undefined)).toEqual([IDS]);
+    expect(planClusterWindows(DIGESTS, undefined, 1_000_000)).toEqual([IDS]);
+  });
+
+  it("packs sorted ids into windows whose prompts each fit the budget", () => {
+    const fullLen = buildClusterPrompt(DIGESTS).length;
+    const budget = fullLen - 1; // force at least two windows
+    const windows = planClusterWindows(DIGESTS, undefined, budget);
+    expect(windows.length).toBeGreaterThan(1);
+    // Coverage: every id exactly once, in sorted order overall.
+    expect(windows.flat()).toEqual(IDS);
+    // Each window's actual prompt fits the budget.
+    for (const w of windows) {
+      const subset: Record<string, Digest> = {};
+      for (const id of w) {
+        const d = DIGESTS[id];
+        if (d) subset[id] = d;
+      }
+      expect(buildClusterPrompt(subset).length).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("gives an oversized single digest its own window instead of dropping it", () => {
+    const big: Record<string, Digest> = {
+      "big-a1.md": digest("x".repeat(2_000)),
+      "small-b2.md": digest("tiny"),
+    };
+    const windows = planClusterWindows(big, undefined, 500);
+    expect(windows.flat().sort()).toEqual(["big-a1.md", "small-b2.md"]);
+    for (const w of windows) expect(w.length).toBe(1);
+  });
+});
+
+describe("applyClusterMerges", () => {
+  const T = (slug: string, members: string[]): ClusterTask => ({
+    slug,
+    title: `T ${slug}`,
+    rationale: "r",
+    members,
+  });
+
+  it("unions members of merged tasks and keeps the rest untouched", () => {
+    const tasks = [
+      T("auth-work", ["a.md"]),
+      T("auth-fixes", ["b.md", "a.md"]),
+      T("cli-stuff", ["c.md"]),
+    ];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      {
+        slugs: ["auth-work", "auth-fixes"],
+        slug: "auth-feature",
+        title: "Auth",
+        rationale: "same goal",
+      },
+    ]);
+    expect(notes).toEqual([]);
+    expect(out.map((t) => t.slug).sort()).toEqual(["auth-feature", "cli-stuff"]);
+    expect(out.find((t) => t.slug === "auth-feature")?.members.sort()).toEqual(["a.md", "b.md"]);
+  });
+
+  it("skips invalid entries with a note instead of failing", () => {
+    const tasks = [T("one-task", ["a.md"]), T("two-task", ["b.md"])];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      { slugs: ["ghost-task", "one-task"], slug: "x-y", title: "x", rationale: "r" },
+      { slugs: ["one-task"], slug: "solo-merge", title: "x", rationale: "r" },
+    ]);
+    expect(out.map((t) => t.slug).sort()).toEqual(["one-task", "two-task"]);
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain("unknown slug");
+    expect(notes[1]).toContain("fewer than two");
+  });
+
+  it("suffixes a merged slug that collides with a kept task", () => {
+    const tasks = [T("kept-name", ["a.md"]), T("m-one", ["b.md"]), T("m-two", ["c.md"])];
+    const { tasks: out } = applyClusterMerges(tasks, [
+      { slugs: ["m-one", "m-two"], slug: "kept-name", title: "x", rationale: "r" },
+    ]);
+    expect(out.map((t) => t.slug).sort()).toEqual(["kept-name", "kept-name-2"]);
+  });
+
+  // The merge response is the ONE model output on the windowed path that lands
+  // after per-window validateCluster, and ClusterMergeSchema types the new slug
+  // as a bare string. A task slug is also a path component
+  // (library/<slug>/…), so a malformed one must never be applied.
+  it("skips a merge whose replacement slug is not 2-5 kebab-case words", () => {
+    const tasks = [T("one-task", ["a.md"]), T("two-task", ["b.md"])];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      { slugs: ["one-task", "two-task"], slug: "Payments Work", title: "x", rationale: "r" },
+    ]);
+    // Unmerged union survives: a valid grouping, just not unified.
+    expect(out.map((t) => t.slug).sort()).toEqual(["one-task", "two-task"]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("not 2-5 kebab-case words");
+    expect(validateCluster({ tasks: out, misc: [] }, ["a.md", "b.md"])).toEqual([]);
+  });
+
+  it("skips a merge whose slug would escape the library directory", () => {
+    const tasks = [T("one-task", ["a.md"]), T("two-task", ["b.md"])];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      { slugs: ["one-task", "two-task"], slug: "../../escaped", title: "x", rationale: "r" },
+    ]);
+    expect(out.map((t) => t.slug)).not.toContain("../../escaped");
+    expect(notes[0]).toContain("not 2-5 kebab-case words");
+  });
+
+  it("keeps a collision suffix inside the 5-word slug limit", () => {
+    // Suffixing a 5-word slug used to produce a 6-word slug, which
+    // validateCluster rejects: the merged task must stay writable.
+    const tasks = [
+      T("one-two-three-four-five", ["a.md"]),
+      T("m-one", ["b.md"]),
+      T("m-two", ["c.md"]),
+    ];
+    const { tasks: out } = applyClusterMerges(tasks, [
+      { slugs: ["m-one", "m-two"], slug: "one-two-three-four-five", title: "x", rationale: "r" },
+    ]);
+    expect(validateCluster({ tasks: out, misc: [] }, ["a.md", "b.md", "c.md"])).toEqual([]);
+    // Still two distinct tasks, and the original keeps its name.
+    expect(out).toHaveLength(2);
+    expect(out.map((t) => t.slug)).toContain("one-two-three-four-five");
+  });
+});
+
+describe("runClusterStage — windowed", () => {
+  it("clusters per window then unifies with one merge call", async () => {
+    const home = tmpHome();
+    const budget = buildClusterPrompt(DIGESTS).length - 1; // forces windowing
+    const windows = planClusterWindows(DIGESTS, undefined, budget);
+    expect(windows.length).toBeGreaterThan(1);
+
+    const prompts: string[] = [];
+    const runner: RunnerFn = (async (o: RunClaudeOptions<unknown>) => {
+      prompts.push(o.prompt);
+      if (o.prompt.includes("=== TASKS")) {
+        // merge call: unify the two per-window auth tasks
+        return {
+          merges: [
+            {
+              slugs: ["auth-window-one", "auth-window-two"],
+              slug: "auth-unified",
+              title: "Auth",
+              rationale: "same goal across windows",
+            },
+          ],
+        };
+      }
+      // window calls: one task per window (first id), rest to misc
+      const idx = prompts.filter((p) => !p.includes("=== TASKS")).length;
+      const w = windows[idx - 1] as string[];
+      return {
+        tasks: [
+          {
+            slug: idx === 1 ? "auth-window-one" : "auth-window-two",
+            title: "t",
+            rationale: "r",
+            members: [w[0]],
+          },
+        ],
+        misc: w.slice(1),
+      };
+    }) as RunnerFn;
+
+    const result = await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      budget,
+      runner,
+      output: sink(),
+    });
+
+    expect(prompts).toHaveLength(windows.length + 1);
+    // Each window prompt mentions exactly its own ids.
+    for (const [i, w] of windows.entries()) {
+      const p = prompts[i] as string;
+      for (const id of w) expect(p).toContain(`- id: ${id}`);
+      for (const id of IDS.filter((x) => !w.includes(x))) expect(p).not.toContain(`- id: ${id}`);
+    }
+    expect(result.tasks.map((t) => t.slug)).toEqual(["auth-unified"]);
+    // Full coverage: every id in a task or misc.
+    const covered = new Set([...result.misc, ...result.tasks.flatMap((t) => t.members)]);
+    expect([...covered].sort()).toEqual(IDS);
+    expect(loadTasks(home)?.tasks[0]?.slug).toBe("auth-unified");
+  });
+
+  it("keeps cross-window slug collisions writable at the 5-word limit", async () => {
+    // Two windows can return the SAME slug; de-duplicating it must not push the
+    // slug past 5 words, or the task becomes unwritable (slug is a path).
+    const home = tmpHome();
+    const budget = buildClusterPrompt(DIGESTS).length - 1;
+    const windows = planClusterWindows(DIGESTS, undefined, budget);
+    let windowCalls = 0;
+    const runner: RunnerFn = (async (o: RunClaudeOptions<unknown>) => {
+      if (o.prompt.includes("=== TASKS")) return { merges: [] };
+      const w = windows[windowCalls++] as string[];
+      // Every window returns the identical 5-word slug.
+      return {
+        tasks: [{ slug: "one-two-three-four-five", title: "t", rationale: "r", members: [w[0]] }],
+        misc: w.slice(1),
+      };
+    }) as RunnerFn;
+
+    const result = await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      budget,
+      runner,
+      output: sink(),
+    });
+    expect(result.tasks).toHaveLength(windows.length);
+    expect(validateCluster({ tasks: result.tasks, misc: result.misc }, IDS)).toEqual([]);
+  });
+
+  it("keeps the unmerged union when the merge call fails", async () => {
+    const home = tmpHome();
+    const budget = buildClusterPrompt(DIGESTS).length - 1;
+    const windows = planClusterWindows(DIGESTS, undefined, budget);
+    let windowCalls = 0;
+    const runner: RunnerFn = (async (o: RunClaudeOptions<unknown>) => {
+      if (o.prompt.includes("=== TASKS")) throw new Error("merge exploded");
+      const w = windows[windowCalls++] as string[];
+      return {
+        tasks: [{ slug: `w-task-${windowCalls}`, title: "t", rationale: "r", members: [w[0]] }],
+        misc: w.slice(1),
+      };
+    }) as RunnerFn;
+
+    const result = await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      budget,
+      runner,
+      output: sink(),
+    });
+    expect(result.tasks).toHaveLength(windows.length);
+    const covered = new Set([...result.misc, ...result.tasks.flatMap((t) => t.members)]);
+    expect([...covered].sort()).toEqual(IDS);
   });
 });
 

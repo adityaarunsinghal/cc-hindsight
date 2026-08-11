@@ -4,7 +4,11 @@ import path from "node:path";
 import { PassThrough, type Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
-import { runPreferences } from "../src/commands/preferences.js";
+import { DEFAULT_TIMEOUT_MS } from "../src/claude/runner.js";
+import {
+  CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS,
+  runPreferences,
+} from "../src/commands/preferences.js";
 import type { LibraryEntry } from "../src/core/library.js";
 import {
   aggregatePreferences,
@@ -299,6 +303,42 @@ describe("runPreferences", () => {
     expect(cap.text()).toContain("- be terse");
     // consolidated items carry no per-task evidence counts:
     expect(cap.text()).not.toContain("stated in 2 of 2");
+  });
+
+  it("scales the consolidation call's default timeout with the preference count", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    writeLibraryEntry(home, entry("t-two-b", [{ text: "prefer tables", evidence: "e" }]));
+    const cap = capture();
+    let seen: number | undefined;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen = opts.timeoutMs;
+      return { preferences: [{ text: "be terse", merged_from: 2 }] };
+    }) as RunnerFn;
+    const code = await runPreferences(
+      { home, consolidate: true, yes: true },
+      { output: cap.out, runner },
+    );
+    expect(code).toBe(0);
+    // 2 aggregated preferences → base + 2 × per-preference allowance.
+    expect(seen).toBe(DEFAULT_TIMEOUT_MS + CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS * 2);
+  });
+
+  it("passes an explicit --timeout (seconds) through to the consolidation call unscaled", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    let seen: number | undefined;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      seen = opts.timeoutMs;
+      return { preferences: [{ text: "be terse", merged_from: 1 }] };
+    }) as RunnerFn;
+    const code = await runPreferences(
+      { home, consolidate: true, yes: true, timeout: "900" },
+      { output: cap.out, runner },
+    );
+    expect(code).toBe(0);
+    expect(seen).toBe(900_000);
   });
 
   it("consolidation failure exits 1 with the reason and the deterministic fallback block", async () => {

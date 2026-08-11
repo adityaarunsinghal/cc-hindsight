@@ -2,7 +2,9 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
 import { askYesNo } from "../claude/consent.js";
+import { DEFAULT_TIMEOUT_MS } from "../claude/runner.js";
 import { type Consolidated, ConsolidateSchema } from "../claude/schemas.js";
+import { resolveTimeoutMs } from "../core/budget.js";
 import { readLibrary } from "../core/library.js";
 import {
   type AggregatedPreference,
@@ -58,6 +60,7 @@ export async function runPreferences(
     runner?: string;
     target?: string;
     consolidate?: boolean;
+    timeout?: string;
     yes?: boolean;
     model?: string;
   },
@@ -143,6 +146,7 @@ export async function runPreferences(
     target,
     runner,
     model: args.model,
+    timeoutMs: resolveTimeoutMs(args.timeout),
     output: out,
   });
   // Offer to copy the merged block (only on success; the failure path already
@@ -175,6 +179,13 @@ export interface ConsolidationOutcome {
 }
 
 /**
+ * Extra timeout allowance per aggregated preference for the consolidation
+ * call, mirroring the cluster stage's per-digest scaling: one call over the
+ * whole set, so the flat default only fits small stores.
+ */
+export const CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS = 5_000;
+
+/**
  * The one-call consolidation + rendering, extracted so callers can reuse it
  * (and wrap it with a copy offer). Runs the runner once in a spinner; on
  * failure emits the deterministic unconsolidated block and returns null, on
@@ -186,10 +197,20 @@ export async function runConsolidation(opts: {
   target: PreferencesTarget;
   runner: RunnerFn;
   model?: string;
+  /** Per-call timeout (ms); default scales with the preference count. */
+  timeoutMs?: number;
   output: Writable;
 }): Promise<ConsolidationOutcome> {
   const { prefs, taskCount, target, runner, model, output } = opts;
   const write = (s = "") => output.write(`${s}\n`);
+
+  // Consolidation is one call over EVERY aggregated preference, so like the
+  // cluster stage its wall-clock cost grows with input size; the flat per-call
+  // default timed out on a real 80+ preference store (at exactly 300000ms,
+  // twice). Scale the default with the preference count; an explicit
+  // --timeout passes through unscaled.
+  const timeoutMs =
+    opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS * prefs.length;
 
   let consolidated: Consolidated;
   try {
@@ -198,6 +219,7 @@ export async function runConsolidation(opts: {
         prompt: buildConsolidatePrompt(prefs),
         schema: ConsolidateSchema,
         model,
+        timeoutMs,
       }),
     );
   } catch (err) {
@@ -341,6 +363,11 @@ export default defineCommand({
     model: {
       type: "string",
       description: "Model to pass through to the runner's --model for --consolidate",
+    },
+    timeout: {
+      type: "string",
+      description:
+        "Consolidation call timeout in seconds (default scales with the preference count)",
     },
     yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
   },
