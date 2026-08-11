@@ -4,6 +4,25 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-08-11
+
+### Fixed
+
+- **`--home`, `--claude-dir` and `--kiro-dir` were ignored before the
+  subcommand.** `--help` presents them as root options, but citty hands a
+  subcommand only its own parsed args, so `cc-hindsight --home /tmp/scratch
+  export` parsed `--home`, discarded it, and used the DEFAULT store. The failure
+  was silent and it targeted exactly the flags that decide where data is read
+  and written: in practice an `export` aimed at a scratch directory ran against
+  the live store and pruned its stale exports. The root command now publishes
+  those three flags into the environment before dispatching, riding the
+  precedence `resolvePaths` already implements (flag > env > default), so a
+  root-level flag beats the default while a subcommand-level flag still beats
+  the root one, and a variable you set yourself is never overwritten.
+  `--source` has no environment variable and cannot ride the same path, so its
+  help text now says to pass it after the subcommand instead of implying a
+  placement that is ignored.
+
 ## [1.3.0] - 2026-08-11
 
 ### Added
@@ -282,7 +301,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.1
 [1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0
 [1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0
 [1.1.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.1.0
