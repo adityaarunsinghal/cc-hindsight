@@ -17,7 +17,12 @@ export const sharedArgs = {
   },
   source: {
     type: "string",
-    description: "Which backend(s) to read: claude, kiro, or auto (default: auto)",
+    // Unlike the path flags above, this one has no environment variable, so the
+    // root-level publish in main.ts cannot carry it into a subcommand: citty
+    // gives a subcommand only its OWN parsed args. Say so rather than advertise
+    // a placement that is silently ignored.
+    description:
+      "Which backend(s) to read: claude, kiro, or auto (default: auto). Pass after the subcommand",
   },
 } as const;
 
