@@ -612,11 +612,32 @@ export function planClusterWindows(
 }
 
 /**
+ * Suffix a slug for uniqueness WITHOUT breaking the 2-5 word slug rule.
+ *
+ * Appending to a 5-word slug would produce a 6-word slug, which
+ * {@link validateCluster} rejects; since a slug is also a path component, the
+ * task would be unwritable. So append only while there is room, and otherwise
+ * replace the final word with the counter, keeping the word count fixed.
+ */
+function suffixSlug(slug: string, n: number): string {
+  const words = slug.split("-");
+  return words.length < 5 ? `${slug}-${n}` : [...words.slice(0, 4), String(n)].join("-");
+}
+
+/**
  * Apply a merge response to the combined window tasks. Deterministic and
  * defensive: an entry is applied only when every referenced slug exists, it
- * names at least two tasks, and no slug was already consumed by an earlier
- * entry; anything else is skipped with a note (the unmerged union is still a
- * fully valid grouping). Members of merged tasks are unioned and deduped.
+ * names at least two tasks, no slug was already consumed by an earlier entry,
+ * and its replacement slug is well-formed; anything else is skipped with a note
+ * (the unmerged union is still a fully valid grouping). Members of merged tasks
+ * are unioned and deduped.
+ *
+ * The slug check is what keeps this path safe to write. Every other cluster
+ * response passes {@link validateCluster} before anything is saved, but the
+ * merge call runs AFTER per-window validation and `ClusterMergeSchema` types
+ * the replacement slug as a bare string. A task slug is also a path component
+ * (`library/<slug>/…`), so a response of `"Payments Work"` or `"../../escaped"`
+ * would otherwise become a directory name.
  */
 export function applyClusterMerges(
   tasks: ClusterTask[],
@@ -642,6 +663,10 @@ export function applyClusterMerges(
       notes.push(`merge skipped: slug(s) already merged ${doubly.join(", ")}`);
       continue;
     }
+    if (!SLUG_PATTERN.test(entry.slug)) {
+      notes.push(`merge skipped: slug "${entry.slug}" is not 2-5 kebab-case words`);
+      continue;
+    }
     for (const s of entry.slugs) consumed.add(s);
     const members = [
       ...new Set(entry.slugs.flatMap((s) => (bySlug.get(s) as ClusterTask).members)),
@@ -655,7 +680,7 @@ export function applyClusterMerges(
   const seen = new Set(kept.map((t) => t.slug));
   for (const m of merged) {
     let slug = m.slug;
-    for (let n = 2; seen.has(slug); n++) slug = `${m.slug}-${n}`;
+    for (let n = 2; seen.has(slug); n++) slug = suffixSlug(m.slug, n);
     seen.add(slug);
     finalTasks.push(slug === m.slug ? m : { ...m, slug });
   }
@@ -745,9 +770,10 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
         const windowCluster = await clusterWindow(windowIds, opts, out, label);
         for (const task of windowCluster.tasks) {
           // The same slug can legitimately appear in two windows; suffix the
-          // later one so the merge call can still address both.
+          // later one so the merge call can still address both. The suffix keeps
+          // the 2-5 word rule, since a slug is also a library path component.
           let slug = task.slug;
-          for (let n = 2; usedSlugs.has(slug); n++) slug = `${task.slug}-${n}`;
+          for (let n = 2; usedSlugs.has(slug); n++) slug = suffixSlug(task.slug, n);
           usedSlugs.add(slug);
           combined.push(slug === task.slug ? task : { ...task, slug });
         }

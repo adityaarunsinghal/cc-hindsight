@@ -20,6 +20,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A windowed clustering merge could write an unusable task slug.** Every other
+  cluster response passes `validateCluster` before anything is saved, but the
+  merge call runs after per-window validation and its schema types the
+  replacement slug as a plain string, so a response of `"Payments Work"` (or
+  `"../../escaped"`) was applied verbatim. A task slug is also a path component
+  (`library/<slug>/…`), so that reached the filesystem. Malformed replacement
+  slugs are now skipped with a note, keeping the still-valid unmerged union.
+  Relatedly, de-duplicating a colliding slug appended a sixth word to an
+  already-5-word slug, which `validateCluster` rejects; the suffix now replaces
+  the final word instead, so both the merge and cross-window collision paths
+  stay within the 2-5 word rule. Only reachable on the windowed path.
 - **A finished run could still refuse to exit.** Settling a spawn on child
   `exit` (v1.2.0) fixed the await-side hang, but the settled child's stdio
   streams were never destroyed. Whenever a grandchild inherited the pipes or

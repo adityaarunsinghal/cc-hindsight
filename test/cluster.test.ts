@@ -421,6 +421,48 @@ describe("applyClusterMerges", () => {
     ]);
     expect(out.map((t) => t.slug).sort()).toEqual(["kept-name", "kept-name-2"]);
   });
+
+  // The merge response is the ONE model output on the windowed path that lands
+  // after per-window validateCluster, and ClusterMergeSchema types the new slug
+  // as a bare string. A task slug is also a path component
+  // (library/<slug>/…), so a malformed one must never be applied.
+  it("skips a merge whose replacement slug is not 2-5 kebab-case words", () => {
+    const tasks = [T("one-task", ["a.md"]), T("two-task", ["b.md"])];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      { slugs: ["one-task", "two-task"], slug: "Payments Work", title: "x", rationale: "r" },
+    ]);
+    // Unmerged union survives: a valid grouping, just not unified.
+    expect(out.map((t) => t.slug).sort()).toEqual(["one-task", "two-task"]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("not 2-5 kebab-case words");
+    expect(validateCluster({ tasks: out, misc: [] }, ["a.md", "b.md"])).toEqual([]);
+  });
+
+  it("skips a merge whose slug would escape the library directory", () => {
+    const tasks = [T("one-task", ["a.md"]), T("two-task", ["b.md"])];
+    const { tasks: out, notes } = applyClusterMerges(tasks, [
+      { slugs: ["one-task", "two-task"], slug: "../../escaped", title: "x", rationale: "r" },
+    ]);
+    expect(out.map((t) => t.slug)).not.toContain("../../escaped");
+    expect(notes[0]).toContain("not 2-5 kebab-case words");
+  });
+
+  it("keeps a collision suffix inside the 5-word slug limit", () => {
+    // Suffixing a 5-word slug used to produce a 6-word slug, which
+    // validateCluster rejects: the merged task must stay writable.
+    const tasks = [
+      T("one-two-three-four-five", ["a.md"]),
+      T("m-one", ["b.md"]),
+      T("m-two", ["c.md"]),
+    ];
+    const { tasks: out } = applyClusterMerges(tasks, [
+      { slugs: ["m-one", "m-two"], slug: "one-two-three-four-five", title: "x", rationale: "r" },
+    ]);
+    expect(validateCluster({ tasks: out, misc: [] }, ["a.md", "b.md", "c.md"])).toEqual([]);
+    // Still two distinct tasks, and the original keeps its name.
+    expect(out).toHaveLength(2);
+    expect(out.map((t) => t.slug)).toContain("one-two-three-four-five");
+  });
 });
 
 describe("runClusterStage — windowed", () => {
@@ -483,6 +525,35 @@ describe("runClusterStage — windowed", () => {
     const covered = new Set([...result.misc, ...result.tasks.flatMap((t) => t.members)]);
     expect([...covered].sort()).toEqual(IDS);
     expect(loadTasks(home)?.tasks[0]?.slug).toBe("auth-unified");
+  });
+
+  it("keeps cross-window slug collisions writable at the 5-word limit", async () => {
+    // Two windows can return the SAME slug; de-duplicating it must not push the
+    // slug past 5 words, or the task becomes unwritable (slug is a path).
+    const home = tmpHome();
+    const budget = buildClusterPrompt(DIGESTS).length - 1;
+    const windows = planClusterWindows(DIGESTS, undefined, budget);
+    let windowCalls = 0;
+    const runner: RunnerFn = (async (o: RunClaudeOptions<unknown>) => {
+      if (o.prompt.includes("=== TASKS")) return { merges: [] };
+      const w = windows[windowCalls++] as string[];
+      // Every window returns the identical 5-word slug.
+      return {
+        tasks: [{ slug: "one-two-three-four-five", title: "t", rationale: "r", members: [w[0]] }],
+        misc: w.slice(1),
+      };
+    }) as RunnerFn;
+
+    const result = await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      budget,
+      runner,
+      output: sink(),
+    });
+    expect(result.tasks).toHaveLength(windows.length);
+    expect(validateCluster({ tasks: result.tasks, misc: result.misc }, IDS)).toEqual([]);
   });
 
   it("keeps the unmerged union when the merge call fails", async () => {
