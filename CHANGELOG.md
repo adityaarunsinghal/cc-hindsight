@@ -4,7 +4,7 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-08-11
 
 ### Added
 
@@ -282,7 +282,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0
 [1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0
 [1.1.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.1.0
 [1.0.2]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.2
