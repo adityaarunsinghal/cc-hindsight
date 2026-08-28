@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { claudeSource } from "./claude/index.js";
 import { KIRO_SESSIONS_SUBDIR } from "./kiro/discover.js";
+import { kiroV3StoreExists } from "./kiro/discover-v3.js";
 import { kiroSource } from "./kiro/index.js";
 import type { SessionSource, SourceName } from "./types.js";
 
@@ -39,13 +40,18 @@ function claudeStoreExists(claudeDir: string): boolean {
   }
 }
 
-/** True when a kiro store exists (a `sessions/cli` dir under kiroDir). */
+/**
+ * True when a kiro store exists: the flat v2 `sessions/cli` dir, OR at least one
+ * v3 per-session dir under `sessions/<hash>/`. A machine on the newer kiro-cli
+ * may have only the v3 store, so both are probed.
+ */
 function kiroStoreExists(kiroDir: string): boolean {
   try {
-    return fs.statSync(path.join(kiroDir, KIRO_SESSIONS_SUBDIR)).isDirectory();
+    if (fs.statSync(path.join(kiroDir, KIRO_SESSIONS_SUBDIR)).isDirectory()) return true;
   } catch {
-    return false;
+    // flat store absent; fall through to the v3 probe.
   }
+  return kiroV3StoreExists(kiroDir);
 }
 
 /** Parse/validate a raw `--source` flag value; defaults to `auto`. */

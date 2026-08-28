@@ -39,7 +39,9 @@ them from the first message.
 
 All the evidence of what you *should* have said is already on disk. Claude Code
 saves every session as JSONL under `~/.claude/projects/`; kiro-cli keeps its
-own store under `~/.kiro/sessions/cli`. Plenty of tools read that data for
+own store under `~/.kiro/sessions` (both the flat `cli/<uuid>.jsonl` layout and
+the newer per-session `<hash>/sess_<uuid>/messages.jsonl` layout). Plenty of
+tools read that data for
 dashboards and transcripts. **Nobody closes the loop from history back to
 better prompting.**
 
@@ -101,7 +103,9 @@ history the same way. Every command takes `--source claude|kiro|auto` (default
 `auto`: read whichever stores exist) and `--kiro-dir` / `KIRO_CONFIG_DIR`
 (default `~/.kiro`, parallel to `--claude-dir`). A machine with both stores
 merges them into one library; the manifest tags each session's `origin` and the
-export summary breaks the count down (`9 claude + 3 kiro`).
+export summary breaks the count down (`9 claude + 3 kiro`). The kiro backend
+reads both on-disk store layouts (the flat v2 store and the newer v3 per-session
+store), preferring the v3 copy when a session was migrated into both.
 
 `distill --runner claude|kiro|auto` chooses which CLI does the distilling —
 orthogonal to `--source`, so you can mine kiro history and distill with claude
