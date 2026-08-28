@@ -1,0 +1,7 @@
+{"id": "x", "timestamp": "2026-08-01T10:00:00.000Z", "payload": {"type": "session_start", "agentType": "vibe", "content": "system role"}}
+{"id": "x", "timestamp": "2026-08-01T10:00:01.000Z", "payload": {"type": "user", "content": "do the thing", "images": null, "documents": null}}
+{"id": "x", "timestamp": "2026-08-01T10:00:02.000Z", "payload": {"type": "assistant", "operationType": "Reasoning", "content": "internal thinking, not a turn"}}
+{"id": "x", "timestamp": "2026-08-01T10:00:03.000Z", "payload": {"type": "tool_call", "toolCallId": "t1", "toolName": "fs_read"}}
+{"id": "x", "timestamp": "2026-08-01T10:00:04.000Z", "payload": {"type": "tool_result", "toolCallId": "t1", "content": [{"kind": "text", "data": "file bytes"}]}}
+{"id": "x", "timestamp": "2026-08-01T10:00:05.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "done, here is the result"}}
+{"id": "x", "timestamp": "2026-08-01T10:00:06.000Z", "payload": {"type": "turn_end", "stopReason": "end_turn"}}

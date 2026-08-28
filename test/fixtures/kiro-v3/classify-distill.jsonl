@@ -1,0 +1,2 @@
+{"id": "x", "timestamp": "2026-08-01T10:00:00.000Z", "payload": {"type": "user", "content": "[cc-hindsight distill]\nDistill the following session."}}
+{"id": "x", "timestamp": "2026-08-01T10:00:00.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "ok"}}
