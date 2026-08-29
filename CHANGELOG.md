@@ -4,6 +4,29 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-29
+
+### Added
+
+- **Kiro v3 (per-session "Sol" store) support.** The kiro backend read only the
+  flat v2 store (`sessions/cli/<uuid>.jsonl`, one `{version, kind, data}` object
+  per line). The current kiro-cli writes a v3 store the backend never saw:
+  `sessions/<workspaceHash>/<sessionDir>/messages.jsonl`, one
+  `{id, timestamp, payload}` object per line, with a sibling `session.json`, a
+  `snapshots/` tree, and subagent transcripts under `sub-executions/`. Every v3
+  session was invisible to scan/status/export/distill. The backend now discovers
+  both stores and, per session, sniffs the line format and dispatches: a v3
+  `user` entry is the human turn (verbatim `content`, in-band ISO timestamp), an
+  `assistant` `Say` entry is the antecedent, and everything else is machine.
+  Human-vs-automation classification mirrors the v2 precedence (distill
+  self-recognition, `.history` present, automation-marker first prompt, recall
+  default), with `parentSessionId` treated as a human fork rather than an
+  exclusion since v3 subagents live under `sub-executions/` and are never
+  enumerated. A session that exists in both stores (its v3 dir is `cli_<uuid>`)
+  is deduped to the v3 copy, and `countOrphanHistories` no longer mis-flags a v3
+  session's `.history` as an orphan. A machine on the newer kiro-cli that has
+  only the v3 store is detected by `--source auto`.
+
 ## [1.3.1] - 2026-08-11
 
 ### Fixed
@@ -301,7 +324,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.4.0
 [1.3.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.1
 [1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0
 [1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0

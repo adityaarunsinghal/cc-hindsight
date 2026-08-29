@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ProjectInfo, SessionInfo } from "../types.js";
+import { kiroV3SessionKeys } from "./discover-v3.js";
 
 /**
  * sources/kiro/discover.ts — enumerate kiro-cli sessions.
@@ -71,7 +72,7 @@ function readMeta(metaPath: string, hasHistory: boolean): KiroSessionMeta {
  * Count non-empty newline-delimited lines by reading the file in fixed-size
  * chunks (mirrors the Claude discoverer's cheap counter). Unreadable → 0.
  */
-function countFileEntries(filePath: string): number {
+export function countFileEntries(filePath: string): number {
   const CHUNK = 64 * 1024;
   let fd: number;
   try {
@@ -129,7 +130,11 @@ export function countOrphanHistories(kiroDir: string): number {
       histories.push(dirent.name.replace(/\.history$/, ""));
     }
   }
-  return histories.filter((stem) => !transcripts.has(stem)).length;
+  // A v3 session's transcript lives in the per-session tree, not the flat store,
+  // and its `.history` stem is the v3 dir basename (`sess_<uuid>`) or bare uuid.
+  // Such a history is NOT an orphan even though no flat `<stem>.jsonl` exists.
+  const v3Keys = kiroV3SessionKeys(kiroDir);
+  return histories.filter((stem) => !transcripts.has(stem) && !v3Keys.has(stem)).length;
 }
 
 /**
@@ -152,6 +157,19 @@ export function discoverKiroSessions(
   kiroDir: string,
   opts: { countEntries?: boolean } = {},
 ): KiroProjectInfo[] {
+  return groupKiroSessionsByCwd(collectKiroV2Sessions(kiroDir, opts));
+}
+
+/**
+ * Collect every flat v2 session under `<kiroDir>/sessions/cli` as an ungrouped
+ * {@link KiroSessionInfo} list. A missing store yields []; unreadable session
+ * files are skipped, never fatal. The kiro source concatenates these with the v3
+ * sessions (discover-v3) and groups the union once via {@link groupKiroSessionsByCwd}.
+ */
+export function collectKiroV2Sessions(
+  kiroDir: string,
+  opts: { countEntries?: boolean } = {},
+): KiroSessionInfo[] {
   const sessionsRoot = path.join(kiroDir, KIRO_SESSIONS_SUBDIR);
   const countEntriesOpt = opts.countEntries ?? true;
 
@@ -159,11 +177,10 @@ export function discoverKiroSessions(
   try {
     dirents = fs.readdirSync(sessionsRoot, { withFileTypes: true });
   } catch {
-    return []; // no kiro store on this machine — nothing to inventory.
+    return []; // no flat kiro store on this machine.
   }
 
-  // Group sessions by cwd (the project identity).
-  const byCwd = new Map<string, KiroSessionInfo[]>();
+  const sessions: KiroSessionInfo[] = [];
   for (const dirent of dirents) {
     if (!dirent.isFile()) continue; // skip <uuid>/ task-sidecar dirs
     if (!dirent.name.endsWith(".jsonl")) continue; // skip .json/.history/.lock
@@ -173,43 +190,58 @@ export function discoverKiroSessions(
     try {
       stat = fs.statSync(filePath);
     } catch {
-      continue; // unreadable session file — skip, do not abort the scan.
+      continue; // unreadable session file, skip, do not abort the scan.
     }
 
     const stem = dirent.name.replace(/\.jsonl$/, "");
     const metaPath = path.join(sessionsRoot, `${stem}.json`);
     const hasHistory = fs.existsSync(path.join(sessionsRoot, `${stem}.history`));
     const meta = readMeta(metaPath, hasHistory);
-    const cwd = meta.cwd ?? "";
 
-    const session: KiroSessionInfo = {
+    sessions.push({
       file: dirent.name,
       path: filePath,
       entryCount: countEntriesOpt ? countFileEntries(filePath) : 0,
       mtime: stat.mtime,
       meta,
-    };
+    });
+  }
+  return sessions;
+}
+
+/**
+ * Group a flat list of kiro sessions (v2 and/or v3) into projects by metadata
+ * `cwd`. Sessions within a project are newest-first (tie-break on file name);
+ * projects are sorted by short name, and short-name collisions (two different
+ * cwds whose basename is identical) are deduped deterministically. Shared by the
+ * v2 discoverer and the merged v2+v3 discover in the source, so a cwd that holds
+ * both a v2 and a v3 session becomes ONE project, not two.
+ */
+export function groupKiroSessionsByCwd(sessions: KiroSessionInfo[]): KiroProjectInfo[] {
+  const byCwd = new Map<string, KiroSessionInfo[]>();
+  for (const session of sessions) {
+    const cwd = session.meta.cwd ?? "";
     const list = byCwd.get(cwd);
     if (list) list.push(session);
     else byCwd.set(cwd, [session]);
   }
 
   const projects: KiroProjectInfo[] = [];
-  for (const [cwd, sessions] of byCwd) {
+  for (const [cwd, group] of byCwd) {
     // Newest first; tie-break on file name for determinism.
-    sessions.sort((a, b) => {
+    group.sort((a, b) => {
       const diff = b.mtime.getTime() - a.mtime.getTime();
       return diff !== 0 ? diff : a.file.localeCompare(b.file);
     });
     const decodedPath = cwd || "unknown";
     const shortName = cwd ? path.basename(cwd) || cwd : "unknown";
-    const entryTotal = sessions.reduce((sum, s) => sum + s.entryCount, 0);
-    const latestMtime = sessions.length > 0 ? sessions[0]?.mtime : undefined;
+    const entryTotal = group.reduce((sum, s) => sum + s.entryCount, 0);
+    const latestMtime = group.length > 0 ? group[0]?.mtime : undefined;
     projects.push({
       dirName: cwd || "unknown",
       decodedPath,
       shortName,
-      sessions,
+      sessions: group,
       entryTotal,
       latestMtime,
     });

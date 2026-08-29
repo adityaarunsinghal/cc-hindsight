@@ -1,0 +1,3 @@
+{"id": "x", "timestamp": "2026-08-02T00:00:00.000Z", "payload": {"type": "user", "content": "hello from sess3"}}
+{"id": "x", "timestamp": "2026-08-02T00:00:01.000Z", "payload": {"type": "assistant", "operationType": "Reasoning", "content": "thinking"}}
+{"id": "x", "timestamp": "2026-08-02T00:00:02.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "hi there"}}

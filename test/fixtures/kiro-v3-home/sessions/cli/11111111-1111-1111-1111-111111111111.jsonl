@@ -1,0 +1,2 @@
+{"version": 1, "kind": "Prompt", "data": {"content": [{"kind": "text", "data": "v2 only message"}], "meta": {"timestamp": 1785000000}}}
+{"version": 1, "kind": "AssistantMessage", "data": {"content": [{"kind": "text", "data": "reply"}]}}
